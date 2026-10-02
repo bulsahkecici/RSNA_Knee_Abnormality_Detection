@@ -20,6 +20,28 @@ INCLUDE = [
     "notebooks/04_kaggle_inference.ipynb",
 ]
 
+_BOOTSTRAP = """\
+from pathlib import Path
+import sys
+
+
+def mount_asset(search=None):
+    roots = []
+    if search is not None:
+        roots.append(Path(search))
+    kaggle = Path("/kaggle/input")
+    if kaggle.is_dir():
+        roots.extend(sorted(path for path in kaggle.iterdir() if path.is_dir()))
+    for root in roots:
+        checkpoint = root / "assets" / "checkpoint.pt"
+        source = root / "src"
+        if checkpoint.is_file() and source.is_dir():
+            if str(source) not in sys.path:
+                sys.path.insert(0, str(source))
+            return {"root": root, "checkpoint": checkpoint, "src": source}
+    raise SystemExit("BLOCKED: versioned code/weights asset is not mounted")
+"""
+
 
 def _kaggle_username() -> str | None:
     import json as _json
@@ -70,10 +92,37 @@ def package_run(
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, target)
     copied_checkpoint = None
+    asset_dir = dest_dir / "asset"
+    asset_dir.mkdir(parents=True, exist_ok=True)
     if checkpoint and checkpoint.is_file():
-        copied_checkpoint = dest_dir / "checkpoint" / checkpoint.name
+        copied_checkpoint = asset_dir / "assets" / "checkpoint.pt"
         copied_checkpoint.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(checkpoint, copied_checkpoint)
+        src_tree = dest_dir / "src"
+        if src_tree.is_dir():
+            shutil.copytree(src_tree, asset_dir / "src", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"), dirs_exist_ok=True)
+    user = _kaggle_username()
+    dataset_slug = f"{user}/rsna-knee-runtime" if user else None
+    dataset_meta = {
+        "title": "rsna-knee-runtime",
+        "id": dataset_slug,
+        "licenses": [{"name": "CC-BY-NC-4.0"}],
+    }
+    (asset_dir / "dataset-metadata.json").write_text(json.dumps(dataset_meta, indent=2), encoding="utf-8")
+    (asset_dir / "bootstrap.py").write_text(_BOOTSTRAP, encoding="utf-8")
+    (dest_dir / "kaggle-asset.json").write_text(
+        json.dumps(
+            {
+                "dataset_dir": "asset",
+                "dataset_sources": [dataset_slug] if dataset_slug else [],
+                "create_argv": ["kaggle", "datasets", "create", "-p", str(asset_dir)],
+                "executed": False,
+                "note": "kernels push uploads the notebook only. Code and weights must be this dataset.",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     if extra_files:
         for path in extra_files:
             if path.exists() and path.is_file():
@@ -89,9 +138,11 @@ def package_run(
         "enable_gpu": True,
         "enable_internet": False,
         "competition_sources": ["rsna-knee-abnormality-detection"],
-        "dataset_sources": [],
+        "dataset_sources": [dataset_slug] if dataset_slug else [],
         "kernel_sources": [],
-        "push_ready": bool(user) and copied_checkpoint is not None and not synthetic,
+        "model_sources": [],
+        "push_ready": False,
+        "push_note": "kernels push does not upload src or checkpoint. Create the dataset asset first; executed stays false here.",
     }
     (dest_dir / "kernel-metadata.json").write_text(json.dumps(kernel_meta, indent=2), encoding="utf-8")
     files = _hash_tree(dest_dir)
@@ -105,7 +156,9 @@ def package_run(
         "lmstudio_required": False,
         "drive_required": False,
         "kernel_metadata": "kernel-metadata.json",
-        "note": "Scoring notebook must run offline. Default audit is not PASS.",
+        "checkpoint_contract": "asset/assets/checkpoint.pt",
+        "asset_dir": "asset",
+        "note": "Scoring notebook must run offline. kernels push does not upload this folder.",
     }
     man_path = dest_dir / "MANIFEST.json"
     man_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -135,6 +188,14 @@ def verify_package(dest_dir: Path) -> list[str]:
         ckpt = dest_dir / manifest["checkpoint"]
         if not ckpt.is_file():
             errors.append("checkpoint_file_missing")
+        elif manifest.get("checkpoint") != "asset/assets/checkpoint.pt":
+            errors.append("checkpoint_path_contract")
+        else:
+            errors.extend(_checkpoint_errors(ckpt))
+    if not (dest_dir / "asset" / "bootstrap.py").is_file():
+        errors.append("bootstrap_missing")
+    if not (dest_dir / "asset" / "dataset-metadata.json").is_file():
+        errors.append("dataset_metadata_missing")
     kernel = dest_dir / "kernel-metadata.json"
     if not kernel.is_file():
         errors.append("kernel_metadata_missing")
@@ -144,10 +205,33 @@ def verify_package(dest_dir: Path) -> list[str]:
             errors.append("internet_not_disabled")
         if "rsna-knee-abnormality-detection" not in (meta.get("competition_sources") or []):
             errors.append("competition_source_missing")
+        if manifest.get("synthetic") is not True and not meta.get("dataset_sources"):
+            errors.append("dataset_source_missing")
+        if meta.get("push_ready") is True:
+            errors.append("push_marked_ready_without_execution")
     for rel, digest in (manifest.get("files") or {}).items():
         path = dest_dir / rel
         if not path.is_file():
             errors.append(f"missing_file:{rel}")
         elif sha256_file(path) != digest:
             errors.append(f"hash_mismatch:{rel}")
+    if manifest.get("synthetic") is not True and not (dest_dir / "asset" / "wheels").is_dir():
+        errors.append("offline_wheels_not_vendored")
+    return errors
+
+
+def _checkpoint_errors(path: Path) -> list[str]:
+    from rsna_knee.training.checkpoint import torch_load
+
+    try:
+        blob = torch_load(path)
+    except Exception:
+        return ["checkpoint_unreadable"]
+    errors: list[str] = []
+    if blob.get("encoder_name") != "dinov2_vits14":
+        errors.append("checkpoint_encoder")
+    if not isinstance(blob.get("model"), dict):
+        errors.append("checkpoint_state_missing")
+    if int(blob.get("step") or 0) < 1:
+        errors.append("checkpoint_no_optimizer_step")
     return errors

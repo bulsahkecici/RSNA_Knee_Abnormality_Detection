@@ -30,8 +30,16 @@ def assert_real_encoder(name: str | None) -> None:
         raise ContractError(f"production encoder must be {PRODUCTION_ENCODER}, got {name!r}")
 
 
-def audit_allows_submit(audit: dict[str, Any]) -> bool:
-    return audit.get("overall") == "PASS"
+def audit_allows_submit(audit: dict[str, Any], *, run_id: str, kernel: str, version: str) -> bool:
+    if audit.get("overall") != "PASS":
+        return False
+    if audit.get("run_id") != run_id:
+        return False
+    if audit.get("kernel") != kernel or str(audit.get("version")) != str(version):
+        return False
+    if not audit.get("checkpoint_sha256") or not audit.get("package_sha256"):
+        return False
+    return True
 
 
 def verify_identity(run_id: str, manifest: dict[str, Any], files_root: Path) -> list[str]:

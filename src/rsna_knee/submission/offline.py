@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import time
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,7 @@ def run_offline_inference(
     img_size: int = 224,
     n_centers: int = 3,
     seconds_per_study: float | None = None,
+    device: str | None = None,
 ) -> dict[str, Any]:
     if not checkpoint.is_file():
         raise FileNotFoundError(f"checkpoint missing: {checkpoint}")
@@ -81,28 +83,42 @@ def run_offline_inference(
     missing = [uid for uid in studies if uid not in manifest["studies"]]
     if missing:
         raise RuntimeError(f"inference refused silent zeros; missing or quarantined: {missing[:8]}")
-    model = _load_model(checkpoint, img_size)
+    from rsna_knee.evaluation.heldout import select_device
+
+    dev = select_device(device)
+    model = _load_model(checkpoint, img_size).to(dev)
     rows = []
+    started = time.perf_counter()
     with torch.no_grad():
         for uid in studies:
             volume = np.load(work / f"{uid}.npy")
             if volume.dtype == np.uint8:
                 volume = volume.astype(np.float32) / 255.0
-            images = torch.from_numpy(volume).unsqueeze(0)
-            slot = torch.tensor(manifest["studies"][uid]["slot_mask"], dtype=torch.float32).unsqueeze(0)
+            images = torch.from_numpy(volume).unsqueeze(0).to(dev)
+            slot = torch.tensor(manifest["studies"][uid]["slot_mask"], dtype=torch.float32).unsqueeze(0).to(dev)
             centers = images.shape[2]
-            center = torch.ones((1, images.shape[1], centers), dtype=torch.float32)
+            center = torch.ones((1, images.shape[1], centers), dtype=torch.float32, device=dev)
             center = center * slot[:, :, None]
             logits = model(images, slot, center)
-            probs = torch.sigmoid(logits)[0].tolist()
+            probs = torch.sigmoid(logits)[0].detach().cpu().tolist()
             row = {STUDY_ID_COL: uid}
             row.update({name: float(p) for name, p in zip(TARGET_COLUMNS, probs, strict=True)})
             rows.append(row)
     write_submission_csv(rows, dest)
+    elapsed = time.perf_counter() - started
+    measured = elapsed / len(rows) if rows else None
+    runtime = project_runtime(measured, n_measured=len(rows))
+    runtime["measured_seconds"] = elapsed
+    runtime["seconds_per_study"] = measured
+    runtime["device"] = str(dev)
+    runtime["stopwatch"] = True
+    if seconds_per_study is not None:
+        runtime["caller_seconds_per_study_ignored"] = seconds_per_study
     return {
         "submission": str(dest),
         "n_studies": len(rows),
         "slots": [list(s) for s in PILOT_SLOTS],
-        "runtime": project_runtime(seconds_per_study, n_measured=len(rows)),
+        "runtime": runtime,
         "quarantine": manifest["quarantine"],
+        "checkpoint": str(checkpoint),
     }

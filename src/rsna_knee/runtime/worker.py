@@ -8,9 +8,15 @@ import platform
 from pathlib import Path
 from typing import Any
 
+from rsna_knee.gates import assert_real_encoder
 from rsna_knee.hashing import sha256_file, sha256_json
+from rsna_knee.models.dinov2 import load_dinov2_vits14
+from rsna_knee.models.study import StudyModel
+from rsna_knee.models.weights import weight_trust
 from rsna_knee.runtime.jobs import validate_job
+from rsna_knee.runtime.train_payload import heldout_batches, prepare_training
 from rsna_knee.runtime.transport import FileTransport
+from rsna_knee.training.loop import train_study_model
 from rsna_knee.training.train import train_tiny
 from rsna_knee.workflow.state import SCHEMA_VERSION, ResultMetrics, ResultRecord
 
@@ -56,6 +62,74 @@ def accept_job(job: dict[str, Any], expected_token: str | None) -> dict[str, Any
     return job
 
 
+def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str, Any], list[str]]:
+    payload, reason = prepare_training(job, job_dir)
+    if payload is None:
+        if reason == "no_items":
+            return "no_items", {"kind": "unavailable", "macro_auc": None, "notes": "worker has no studies"}, []
+        if reason and reason.startswith("leakage"):
+            return "leakage", {"kind": "unavailable", "macro_auc": None, "notes": reason}, []
+        return reason or "no_items", {"kind": "unavailable", "macro_auc": None, "notes": reason or "inputs missing"}, []
+    trust = weight_trust(payload["weights"])
+    if not trust["allowlisted"] and not trust["official"]:
+        return (
+            "unverified_weights",
+            {
+                "kind": "unavailable",
+                "macro_auc": None,
+                "notes": "random or unverified weights are not pretrained DINOv2",
+                "weights_sha256": trust["sha256"],
+            },
+            [],
+        )
+    encoder = load_dinov2_vits14(payload["weights"], img_size=payload["img_size"])
+    if encoder.provenance.get("pretrained") and not trust["official"]:
+        return "unverified_weights", {"kind": "unavailable", "macro_auc": None, "notes": "pretrained flag without official hash"}, []
+    out_path = Path(job["checkpoint_out"]) if job.get("checkpoint_out") else job_dir / "checkpoint.pt"
+    before = sha256_file(out_path) if out_path.is_file() else None
+    train_cfg = job.get("train") or {}
+    model = StudyModel(encoder, freeze_encoder=True)
+    trained = train_study_model(
+        model,
+        payload["batches"],
+        epochs=int(train_cfg.get("epochs", 1)),
+        effective_batch=int(train_cfg.get("effective_batch", 1)),
+        microbatch=int(train_cfg.get("microbatch", 1)),
+        seed=int(train_cfg.get("seed", 0)),
+        unfreeze_after_steps=train_cfg.get("unfreeze_after_steps"),
+        ckpt_path=out_path,
+        input_id=payload["input_id"],
+        config_id=payload["config_id"],
+    )
+    after = sha256_file(out_path) if out_path.is_file() else None
+    if trained["step"] < 1 or after is None or after == before:
+        return "no_checkpoint", {"kind": "unavailable", "macro_auc": None, "notes": "training did not write a new checkpoint"}, []
+    from rsna_knee.evaluation.heldout import evaluate_checkpoint
+
+    metrics_path = job_dir / "metrics.json"
+    eval_metrics = evaluate_checkpoint(
+        out_path,
+        train_batches=None,
+        weak_batches=heldout_batches(payload, payload["weak_uids"]),
+        gold_batches=heldout_batches(payload, payload["gold_uids"]),
+        dest=metrics_path,
+        img_size=payload["img_size"],
+        scope=payload["scope"],
+    )
+    eval_metrics["steps"] = trained["step"]
+    eval_metrics["weights_official"] = bool(trust["official"])
+    eval_metrics["weights_reason"] = trust["reason"]
+    eval_metrics["train_uids"] = payload["train_uids"]
+    eval_metrics["notes"] = (
+        "optimizer update from allowlisted weights; not an official-hash claim"
+        if not trust["official"]
+        else "optimizer update from official DINOv2 hash"
+    )
+    eval_metrics["kind"] = "real"
+    metrics_path.write_text(json.dumps(eval_metrics), encoding="utf-8")
+    return "ok", eval_metrics, [str(out_path), str(metrics_path)]
+
+
 def run_job(
     job: dict[str, Any],
     transport: FileTransport,
@@ -70,35 +144,44 @@ def run_job(
     exit_reason = "ok"
     checkpoint_uris: list[str] = []
     metrics: dict[str, Any]
+    job_dir = Path(job["bundle_path"]).parent if job.get("bundle_path") else Path(".")
     if errors:
         exit_reason = "rejected"
         metrics = {"kind": "unavailable", "macro_auc": None, "notes": ",".join(errors)}
-    elif items is None:
+    elif not synthetic:
+        try:
+            assert_real_encoder(encoder)
+        except Exception as exc:  # noqa: BLE001
+            exit_reason = "rejected_encoder"
+            metrics = {"kind": "unavailable", "macro_auc": None, "notes": str(exc)}
+        else:
+            if items is not None and not job.get("resources"):
+                exit_reason = "rejected"
+                metrics = {
+                    "kind": "unavailable",
+                    "macro_auc": None,
+                    "notes": "existing checkpoint or raw items are not a training run",
+                }
+            else:
+                exit_reason, metrics, checkpoint_uris = _finish_training(job, job_dir)
+    elif items is None and not (job.get("resources") or {}).get("cache"):
         exit_reason = "no_items"
         metrics = {"kind": "unavailable", "macro_auc": None, "notes": "worker has no studies"}
-    elif not synthetic and encoder != "tiny_test_encoder":
-        ckpt = job.get("checkpoint")
-        if not ckpt or not Path(ckpt).is_file():
-            exit_reason = "no_checkpoint"
-            metrics = {"kind": "unavailable", "macro_auc": None, "notes": "production job has no checkpoint"}
-        else:
-            exit_reason = "ok"
-            checkpoint_uris = [str(ckpt)]
-            metrics = {"kind": "real", "macro_auc": None, "notes": "checkpoint present; AUC is not invented here"}
     else:
-        out = train_tiny(items, epochs=1, ckpt_dir=None)
+        out = train_tiny(items or [], epochs=1, ckpt_dir=None)
         if out.get("step", 0) <= 0:
             exit_reason = "no_checkpoint"
             metrics = {"kind": "unavailable", "macro_auc": None, "notes": "training produced no step"}
         else:
             metrics = {
-                "kind": "synthetic" if synthetic else "real",
+                "kind": "synthetic",
                 "macro_auc": None,
                 "notes": "tiny test step only; not a DINOv2 result",
                 "steps": out["step"],
             }
-    if exit_reason == "ok" and not synthetic and not checkpoint_uris and encoder != "tiny_test_encoder":
+    if exit_reason == "ok" and not synthetic and not checkpoint_uris:
         exit_reason = "no_checkpoint"
+        metrics = {"kind": "unavailable", "macro_auc": None, "notes": "production run produced no checkpoint"}
     transport.write_heartbeat(job["job_id"], job["attempt_id"], {"stage": exit_reason, "handshake": hs})
     rec = ResultRecord(
         schema_version=SCHEMA_VERSION,

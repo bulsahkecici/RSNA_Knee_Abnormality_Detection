@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -308,15 +309,27 @@ def stage_cache(state: PipelineState, registry: Registry, limit: int = 20) -> Pi
             "Mac'e 570GB arşiv indirmeyin. Var olan npy dosyası cache hazır sayılmaz."
         )
         return state
+    from rsna_knee.data.cache_build import manifest_ready
+
+    ready, reason = manifest_ready(manifest)
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     studies = payload.get("studies") or {}
-    if not studies or any(looks_synthetic_uid(uid) for uid in studies):
+    if not ready:
+        state.stage = Stage.BLOCKED
+        state.blocked_reason = reason
+        state.artifacts["cache_manifest"] = str(manifest)
+        state.next_action_tr = "Manifest shard, hash veya pilot kapsamı doğrulanmadan CACHE_READY olmaz."
+        return state
+    if any(looks_synthetic_uid(uid) for uid in studies):
         state.stage = Stage.BLOCKED
         state.blocked_reason = "cache_not_real"
         return state
     state.stage = Stage.CACHE_READY
     state.hashes["cache"] = sha256_file(manifest)
     state.artifacts["cache_manifest"] = str(manifest)
+    state.artifacts["cache_scope"] = str(payload.get("scope") or "")
+    if payload.get("scope") != "full":
+        state.next_action_tr = "Cache pilot kapsamındadır. Bu manifest tam dataset cache'i değildir."
     return state
 
 
@@ -397,8 +410,29 @@ def stage_train(state: PipelineState, registry: Registry, exp_path: str | None =
         state.hashes["train"] = sha256_file(ckpt / "last.npz") if (ckpt / "last.npz").exists() else ""
         state.artifacts["encoder"] = "tiny_test_encoder"
         return state
-    if _reject_fixtures(state, [], "dinov2_vits14") :
+    if _reject_fixtures(state, [], "dinov2_vits14"):
         return state
+    from rsna_knee.paths import CONFIG_DIR
+    from rsna_knee.runtime.transport import FileTransport
+    from rsna_knee.runtime.worker import run_job
+
+    resources: dict[str, str] = {}
+    config_path = CONFIG_DIR / "default.yaml"
+    if config_path.is_file():
+        resources["config"] = str(config_path)
+    for key, artifact in (("folds", "folds"), ("labels", "labels"), ("cache", "cache_manifest")):
+        path = state.artifacts.get(artifact)
+        if path and Path(path).is_file():
+            resources[key] = path
+    weights = state.artifacts.get("weights") or os.environ.get("RSNA_DINOV2_WEIGHTS")
+    if not weights:
+        default_weights = CONFIG_DIR.parent / "artifacts" / "weights" / "dinov2_vits14_pretrain.pth"
+        if default_weights.is_file():
+            weights = str(default_weights)
+    if weights and Path(weights).is_file():
+        resources["weights"] = str(weights)
+        state.artifacts["weights"] = str(weights)
+    checkpoint_out = ckpt / "checkpoint.pt"
     job = build_job(
         run_id=state.run_id,
         stage="TRAINING",
@@ -411,29 +445,38 @@ def stage_train(state: PipelineState, registry: Registry, exp_path: str | None =
         dest=ckpt / "job",
         synthetic=False,
         fencing_token=state.fencing_token,
+        resources=resources,
+        input_root=config_path.parent.parent if config_path.is_file() else None,
+        checkpoint_out=str(checkpoint_out),
+        train={"epochs": 1, "effective_batch": 1, "microbatch": 1, "seed": 0},
     )
-    state.artifacts["job"] = str(ckpt / "job" / "job.json")
+    job_path = ckpt / "job" / "job.json"
+    job_path.write_text(json.dumps(job, indent=2), encoding="utf-8")
+    state.artifacts["job"] = str(job_path)
     state.artifacts["experiment"] = exp_path or ""
     state.hashes["train"] = job["bundle_sha256"]
-    cfg = load_config()
-    cuda = False
-    try:
-        import torch
-
-        cuda = bool(torch.cuda.is_available())
-    except Exception:
-        cuda = False
-    if not cuda or not cfg.runtime.fallback_training.cpu_full_training_enabled:
+    if not {"folds", "labels", "cache", "weights"} <= set(resources):
         state.stage = Stage.NEEDS_RUNTIME
-        state.blocked_reason = "cuda_required_for_dinov2"
+        state.blocked_reason = "training_inputs_missing"
         state.next_action_tr = (
-            "Job bundle yazıldı. Colab eklentisinde kernel bağlandıktan sonra "
-            "rsna worker --job-bundle çalışır. TinyEncoder ve sahte AUC yazılmadı."
+            "Job bundle yazıldı. Folds, labels, cache ve allowlist'teki DINOv2 ağırlığı gerekir. "
+            "Colab eklentisi bağlandıktan sonra rsna worker --job-bundle bu dosyayı yükler."
         )
         return state
-    state.stage = Stage.NEEDS_RUNTIME
-    state.blocked_reason = "remote_dispatch_not_started"
-    state.next_action_tr = "CUDA görünüyor ama bu oturum remote eğitim başlatmaz."
+    record = run_job(job, FileTransport(ckpt / "transport"), expected_token=job["fencing_token"])
+    state.artifacts["worker_result"] = str(ckpt / "transport" / "inbox")
+    if record.exit_reason != "ok":
+        state.stage = Stage.NEEDS_RUNTIME if record.exit_reason == "unverified_weights" else Stage.BLOCKED
+        state.blocked_reason = record.exit_reason
+        state.next_action_tr = record.metrics.notes or "Worker eğitimi tamamlamadı."
+        return state
+    state.stage = Stage.TRAINING
+    state.artifacts["checkpoint"] = record.checkpoint_uris[0]
+    state.hashes["train"] = sha256_file(Path(record.checkpoint_uris[0]))
+    if len(record.checkpoint_uris) > 1:
+        state.artifacts["metrics"] = record.checkpoint_uris[1]
+        state.hashes["evaluate"] = sha256_file(Path(record.checkpoint_uris[1]))
+    state.artifacts["encoder"] = "dinov2_vits14"
     return state
 
 
@@ -446,8 +489,41 @@ def stage_evaluate(state: PipelineState, registry: Registry) -> PipelineState:
             state.blocked_reason = "evaluate_requires_saved_checkpoint"
             state.next_action_tr = "Evaluate yeni bir model kurmaz. Kayıtlı DINOv2 checkpoint gerekir."
             return state
-        state.stage = Stage.BLOCKED
-        state.blocked_reason = "held_out_eval_not_run"
+        from rsna_knee.evaluation.heldout import evaluate_checkpoint
+        from rsna_knee.runtime.train_payload import heldout_batches, prepare_training
+
+        job_path = state.artifacts.get("job")
+        if not job_path or not Path(job_path).is_file():
+            state.stage = Stage.BLOCKED
+            state.blocked_reason = "held_out_inputs_missing"
+            state.next_action_tr = "Held-out için job bundle içindeki folds, labels ve cache gerekir."
+            return state
+        job = json.loads(Path(job_path).read_text(encoding="utf-8"))
+        payload, reason = prepare_training(job, Path(job_path).parent)
+        if payload is None:
+            state.stage = Stage.BLOCKED
+            state.blocked_reason = reason or "held_out_inputs_missing"
+            return state
+        metrics_path = roots.runs / state.run_id / "metrics.json"
+        try:
+            metrics = evaluate_checkpoint(
+                Path(ckpt),
+                train_batches=None,
+                weak_batches=heldout_batches(payload, payload["weak_uids"]),
+                gold_batches=heldout_batches(payload, payload["gold_uids"]),
+                dest=metrics_path,
+                img_size=payload["img_size"],
+                scope=payload["scope"],
+            )
+        except RuntimeError as exc:
+            state.stage = Stage.BLOCKED
+            state.blocked_reason = "checkpoint_unreadable"
+            state.next_action_tr = str(exc)
+            return state
+        state.stage = Stage.EVALUATING
+        state.artifacts["metrics"] = str(metrics_path)
+        state.artifacts["predictions"] = str(metrics.get("predictions") or "")
+        state.hashes["evaluate"] = sha256_file(metrics_path)
         return state
     ckpt_path = Path(state.artifacts.get("checkpoint") or "")
     if not ckpt_path.is_file():
@@ -515,7 +591,13 @@ def stage_package(state: PipelineState, registry: Registry) -> PipelineState:
     roots = _roots(state)
     audit_path = state.artifacts.get("audit")
     audit = json.loads(Path(audit_path).read_text(encoding="utf-8")) if audit_path and Path(audit_path).is_file() else {"overall": "BLOCKED"}
-    pkg = package_run(state.run_id, dest_root=roots.submissions, synthetic=state.synthetic)
+    ckpt_path = Path(state.artifacts["checkpoint"]) if state.artifacts.get("checkpoint") else None
+    pkg = package_run(
+        state.run_id,
+        dest_root=roots.submissions,
+        synthetic=state.synthetic,
+        checkpoint=ckpt_path if ckpt_path and ckpt_path.is_file() else None,
+    )
     if state.synthetic:
         items = _items_from_synthetic(roots.cache)
         saved = load_numpy_checkpoint(Path(state.artifacts["checkpoint"]))
@@ -530,9 +612,27 @@ def stage_package(state: PipelineState, registry: Registry) -> PipelineState:
         (Path(pkg["dir"]) / "submission_validate.json").write_text(json.dumps(val, indent=2), encoding="utf-8")
         state.artifacts["submission"] = str(sub)
     state.artifacts["package"] = pkg["dir"]
-    state.stage = Stage.READY_TO_SUBMIT if audit.get("overall") == "PASS" else Stage.BLOCKED
+    state.artifacts["package_tar"] = pkg["tar"]
+    state.hashes["package"] = pkg["sha256"]
+    copied = (pkg.get("manifest") or {}).get("checkpoint")
+    copied_hash = None
+    if copied:
+        copied_file = Path(pkg["dir"]) / copied
+        if copied_file.is_file():
+            copied_hash = sha256_file(copied_file)
+            state.hashes["checkpoint"] = copied_hash
+    identity_errors = list(pkg.get("identity_errors") or [])
+    audit_bound = (
+        audit.get("overall") == "PASS"
+        and audit.get("run_id") == state.run_id
+        and audit.get("checkpoint_sha256")
+        and audit.get("package_sha256") == pkg["sha256"]
+        and copied_hash is not None
+        and audit.get("checkpoint_sha256") == state.hashes.get("train")
+    )
+    state.stage = Stage.READY_TO_SUBMIT if audit_bound and not identity_errors else Stage.BLOCKED
     if state.stage == Stage.BLOCKED:
-        state.blocked_reason = "audit_blocks_submit"
+        state.blocked_reason = identity_errors[0] if identity_errors else "audit_blocks_submit"
     state.next_action_tr = "CSV biçimi submit açmaz. Audit PASS ve kimlik doğrulaması gerekir."
     return state
 

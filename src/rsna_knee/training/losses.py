@@ -32,7 +32,8 @@ def masked_bce_with_logits(
     return float((loss * w).sum() / den)
 
 
-def torch_masked_bce(logits, targets, mask, weight=None):
+def torch_masked_bce_parts(logits, targets, mask, weight=None):
+    """Return (weighted loss sum, weight sum) so microbatches can form one mean."""
     import torch
     import torch.nn.functional as F
 
@@ -43,5 +44,9 @@ def torch_masked_bce(logits, targets, mask, weight=None):
     w = mask
     if weight is not None:
         w = w * weight
-    den = w.sum().clamp_min(1e-8)
-    return (loss * w).sum() / den
+    return (loss * w).sum(), w.sum()
+
+
+def torch_masked_bce(logits, targets, mask, weight=None):
+    total, den = torch_masked_bce_parts(logits, targets, mask, weight)
+    return total / den.clamp_min(1e-8)

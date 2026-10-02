@@ -11,6 +11,22 @@ from rsna_knee.workflow.locks import new_fencing_token, new_lease_id
 from rsna_knee.workflow.state import SCHEMA_VERSION
 
 
+def _resource(path: str | Path, input_root: Path | None) -> dict[str, Any]:
+    file_path = Path(path)
+    relative = file_path.name
+    if input_root is not None:
+        try:
+            relative = str(file_path.resolve().relative_to(input_root.resolve()))
+        except ValueError:
+            relative = file_path.name
+    return {
+        "uri": str(file_path),
+        "relative": relative,
+        "sha256": sha256_file(file_path) if file_path.is_file() else None,
+        "input_root": None if input_root is None else str(input_root),
+    }
+
+
 def build_job(
     *,
     run_id: str,
@@ -20,9 +36,20 @@ def build_job(
     synthetic: bool = False,
     fencing_token: str | None = None,
     attempt_id: str | None = None,
+    resources: dict[str, str] | None = None,
+    train: dict[str, Any] | None = None,
+    input_root: Path | None = None,
+    checkpoint_out: str | None = None,
 ) -> dict[str, Any]:
     dest.mkdir(parents=True, exist_ok=True)
-    manifest = {"run_id": run_id, "stage": stage, "synthetic": synthetic, "inputs": inputs}
+    resolved = {key: _resource(path, input_root) for key, path in (resources or {}).items()}
+    manifest = {
+        "run_id": run_id,
+        "stage": stage,
+        "synthetic": synthetic,
+        "inputs": inputs,
+        "resources": resolved,
+    }
     man_path = dest / "input_manifest.json"
     man_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     digest = sha256_file(man_path)
@@ -36,11 +63,15 @@ def build_job(
         "stage": stage,
         "bundle_sha256": digest,
         "bundle_path": str(man_path),
-        "config_hash": inputs.get("config", ""),
-        "fold_hash": inputs.get("folds", ""),
-        "labels_hash": inputs.get("labels", ""),
-        "cache_hash": inputs.get("cache", ""),
-        "input_uris": [str(man_path)],
+        "config_hash": (resolved.get("config") or {}).get("sha256") or inputs.get("config", ""),
+        "fold_hash": (resolved.get("folds") or {}).get("sha256") or inputs.get("folds", ""),
+        "labels_hash": (resolved.get("labels") or {}).get("sha256") or inputs.get("labels", ""),
+        "cache_hash": (resolved.get("cache") or {}).get("sha256") or inputs.get("cache", ""),
+        "input_uris": [str(man_path), *[item["uri"] for item in resolved.values()]],
+        "resources": resolved,
+        "train": train or {},
+        "checkpoint_out": checkpoint_out,
+        "input_root": None if input_root is None else str(input_root),
         "lease_id": new_lease_id(),
         "fencing_token": token,
         "synthetic": synthetic,

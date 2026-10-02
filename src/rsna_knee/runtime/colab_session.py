@@ -25,7 +25,7 @@ def run_after_handshake(job_bundle: Path, inbox: Path | None = None) -> dict[str
     job = load_job_bundle(job_bundle)
     (job_bundle.parent / "handshake.json").write_text(json.dumps(hs, default=str, indent=2), encoding="utf-8")
     transport = FileTransport(inbox) if inbox else FileTransport(job_bundle.parent / "transport")
-    record = run_job(job, transport, items=None, expected_token=job.get("fencing_token"))
+    record = run_job(job, transport, expected_token=job.get("fencing_token"))
     return {
         "status": "BLOCKED" if record.exit_reason != "ok" else "ok",
         "exit_reason": record.exit_reason,

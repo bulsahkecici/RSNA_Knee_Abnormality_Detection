@@ -127,6 +127,67 @@ def series_to_centers(pairs: list[tuple[np.ndarray, SliceGeom]], *, size: int, n
     return np.stack(triplets, axis=0).astype(np.float32), mode
 
 
+def _prior_reusable(
+    prior: dict[str, Any] | None,
+    *,
+    pp_hash: str,
+    shape: list[int],
+    source_hashes: dict[str, str],
+    slots: list[list[str]],
+    n_centers: int,
+) -> dict[str, Any] | None:
+    if not prior:
+        return None
+    meta = dict(prior.get("meta") or {})
+    shard = Path(str(prior.get("shard") or ""))
+    if not shard.is_file():
+        return None
+    if meta.get("preprocess_hash") != pp_hash:
+        return None
+    if list(meta.get("shape") or []) != list(shape):
+        return None
+    if int(meta.get("n_centers") or 0) != int(n_centers):
+        return None
+    if list(meta.get("slots") or []) != slots:
+        return None
+    if meta.get("source_hashes") != source_hashes:
+        return None
+    digest = meta.get("sha256") or prior.get("sha256")
+    if not digest or sha256_file(shard) != digest:
+        return None
+    array = np.load(shard, mmap_mode="r")
+    if list(array.shape) != list(shape) or str(array.dtype) != "uint8":
+        return None
+    meta["sha256"] = digest
+    meta["resumed"] = True
+    return meta
+
+
+def manifest_ready(path: Path) -> tuple[bool, str]:
+    if not path.is_file():
+        return False, "cache_manifest_missing"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("scope") not in {"pilot", "full"}:
+        return False, "cache_scope_missing"
+    studies = payload.get("studies") or {}
+    if not studies:
+        return False, "cache_empty"
+    root = path.parent
+    for uid, meta in studies.items():
+        shard = root / f"{uid}.npy"
+        if not shard.is_file():
+            return False, "shard_missing"
+        expected = meta.get("sha256")
+        if not expected or sha256_file(shard) != expected:
+            return False, "content_hash_mismatch"
+        array = np.load(shard, mmap_mode="r")
+        if list(array.shape) != list(meta.get("shape") or []):
+            return False, "shape_mismatch"
+    if payload.get("scope") == "full" and int(payload.get("n_studies") or 0) < int(payload.get("n_requested") or 0):
+        return False, "full_scope_incomplete"
+    return True, str(payload["scope"])
+
+
 def build_cache(
     *,
     series_csv: Path,
@@ -149,11 +210,21 @@ def build_cache(
     studies: dict[str, Any] = {}
     quarantine: dict[str, Any] = {}
     source_hashes = {"series_csv": sha256_file(series_csv)}
+    slot_names = [list(slot) for slot in PILOT_SLOTS]
     pp_hash = preprocess_hash({"size": size, "n_centers": n_centers, "slots": PILOT_SLOTS})
+    expected_shape = [len(PILOT_SLOTS), n_centers, 3, size, size]
     for uid in uids:
         prior = (index.data.get("studies") or {}).get(uid) if resume else None
-        if prior and Path(str(prior.get("shard", ""))).is_file():
-            studies[uid] = prior.get("meta") or {"uid": uid, "resumed": True}
+        reused = _prior_reusable(
+            prior,
+            pp_hash=pp_hash,
+            shape=expected_shape,
+            source_hashes=source_hashes,
+            slots=slot_names,
+            n_centers=n_centers,
+        )
+        if reused is not None:
+            studies[uid] = reused
             continue
         rows = grouped.get(uid)
         if not rows:
@@ -213,12 +284,17 @@ def build_cache(
             "slot_mask": final_mask,
             "order": order_mode,
             "source_hashes": source_hashes,
+            "slots": slot_names,
+            "n_centers": n_centers,
             "synthetic": False,
         }
         path = write_shard(uid, volume, meta, root=dest, dtype="uint8")
         meta["sha256"] = sha256_file(path)
         studies[uid] = meta
         index.record_ok(uid, path, meta)
+    requested = list(uids)
+    complete = set(studies) == set(grouped) and not quarantine and limit is None
+    scope = "full" if complete else "pilot"
     manifest = {
         "preprocess_version": PREPROCESS_VERSION,
         "preprocess_hash": pp_hash,
@@ -227,6 +303,14 @@ def build_cache(
         "quarantine": quarantine,
         "n_studies": len(studies),
         "n_quarantine": len(quarantine),
+        "n_requested": len(requested),
+        "requested_uids": requested,
+        "scope": scope,
+        "coverage_note": (
+            "all studies in the series csv were decoded"
+            if scope == "full"
+            else "pilot subset; this manifest is not the full training cache"
+        ),
     }
     man_path = dest / "manifest.json"
     man_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

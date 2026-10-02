@@ -12,7 +12,8 @@ def test_strict_roundtrip_and_mismatch(tmp_path):
     path = tmp_path / "ok.pt"
     torch.save(model.state_dict(), path)
     loaded = load_dinov2_vits14(path, img_size=28)
-    assert loaded.provenance["pretrained"] is True
+    assert loaded.provenance["pretrained"] is False
+    assert loaded.provenance["allowlisted"] is False
     x = torch.zeros(2, 3, 28, 28)
     y = loaded(x)
     assert y.shape == (2, 384)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,9 @@ from rsna_knee.paths import STATE_DIR, ensure_runtime_dirs
 class FileTransport:
     def __init__(self, root: Path | None = None):
         ensure_runtime_dirs()
-        self.root = root or (STATE_DIR / "transport")
+        override = os.environ.get("RSNA_ROOTS")
+        default = Path(override) / "transport" if override else STATE_DIR / "transport"
+        self.root = root or default
         self.outbox = self.root / "outbox"
         self.inbox = self.root / "inbox"
         self.outbox.mkdir(parents=True, exist_ok=True)

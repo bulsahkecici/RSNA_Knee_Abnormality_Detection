@@ -13,7 +13,7 @@ from rsna_knee.config import load_config, load_experiment
 from rsna_knee.data.folds import create_folds
 from rsna_knee.data.metadata import audit_metadata, fetch_metadata_csvs
 from rsna_knee.paths import ensure_runtime_dirs
-from rsna_knee.pipeline import run_pipeline, stage_cache, stage_labels
+from rsna_knee.pipeline import run_pipeline, stage_cache, stage_evaluate, stage_labels
 from rsna_knee.roots import roots_for
 from rsna_knee.runtime.gpu_policy import GpuAllocator
 from rsna_knee.runtime.handoff import write_handoff
@@ -28,7 +28,7 @@ from rsna_knee.submission.package import package_run
 from rsna_knee.workflow.graph import new_state
 from rsna_knee.workflow.locks import new_run_id
 from rsna_knee.workflow.registry import Registry
-from rsna_knee.workflow.state import Stage
+from rsna_knee.workflow.state import PipelineState, Stage
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="RSNA Knee durable pipeline")
 metadata_app = typer.Typer(help="Metadata CSV fetch/audit")
@@ -216,12 +216,34 @@ def experiment_run(config: Path = typer.Option(..., "--config")) -> None:
 
 @app.command("evaluate")
 def evaluate_cmd(run_id: str = typer.Option(..., "--run-id")) -> None:
-    run = Registry().get_run(run_id) or Registry(roots_for(True).registry).get_run(run_id)
+    registry = Registry()
+    run = registry.get_run(run_id)
+    if run is None:
+        registry = Registry(roots_for(True).registry)
+        run = registry.get_run(run_id)
     ckpt = (run or {}).get("artifacts", {}).get("checkpoint") if run else None
     if not run or not ckpt or not Path(ckpt).is_file():
         _print({"stage": "BLOCKED", "reason": "evaluate_requires_saved_checkpoint", "run_id": run_id})
         return
-    _print({"run_id": run_id, "checkpoint": ckpt, "encoder": (run.get("artifacts") or {}).get("encoder")})
+    state = PipelineState.model_validate(run)
+    state = stage_evaluate(state, registry)
+    registry.upsert_run(state.run_id, state.profile, state.stage, state.model_dump(), state.synthetic)
+    metrics: dict = {}
+    path = state.artifacts.get("metrics")
+    if path and Path(path).is_file():
+        metrics = json.loads(Path(path).read_text(encoding="utf-8"))
+    _print(
+        {
+            "run_id": run_id,
+            "stage": str(state.stage),
+            "reason": state.blocked_reason,
+            "checkpoint": ckpt,
+            "predictions": state.artifacts.get("predictions"),
+            "gold_macro_auc": (metrics.get("gold_metrics") or {}).get("macro_auc"),
+            "weak_macro_auc": (metrics.get("weak_metrics") or {}).get("macro_auc"),
+            "note": metrics.get("note"),
+        }
+    )
 
 
 @app.command("audit")

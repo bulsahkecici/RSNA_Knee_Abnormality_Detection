@@ -6,16 +6,17 @@ from pathlib import Path
 from rsna_knee.cli import experiment_run
 from rsna_knee.labels.extract import LabelStore, extract_one
 from rsna_knee.labels.lmstudio import LMStudioClient
-from rsna_knee.paths import RUNS_DIR
+from rsna_knee.roots import roots_for
 from rsna_knee.runtime.colab_session import run_after_handshake
 from rsna_knee.runtime.jobs import build_job
 from rsna_knee.runtime.providers.kaggle import KaggleProvider
 
 
 def test_experiment_run_does_not_emit_tiny_checkpoint():
-    before = {path for path in RUNS_DIR.glob("*") if path.is_dir()}
+    runs = roots_for(False).runs
+    before = {path for path in runs.glob("*") if path.is_dir()} if runs.exists() else set()
     experiment_run(Path("configs/experiments/EXP-002-frozen.yaml"))
-    created = [path for path in RUNS_DIR.glob("*") if path.is_dir() and path not in before]
+    created = [path for path in runs.glob("*") if path.is_dir() and path not in before]
     assert created
     run = created[-1]
     assert (run / "job" / "job.json").is_file()

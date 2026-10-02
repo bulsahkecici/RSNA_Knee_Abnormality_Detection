@@ -1,14 +1,14 @@
-from __future__ import annotations
+"""Keep pytest off the real folds, labels, cache, registry, and control files."""
 
-import os
-from pathlib import Path
+from __future__ import annotations
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-
 
 @pytest.fixture(autouse=True)
-def _chdir_root(monkeypatch):
-    monkeypatch.chdir(ROOT)
-    os.environ.setdefault("RSNA_LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1")
+def isolate_real_roots(tmp_path, monkeypatch):
+    base = tmp_path / "real-roots"
+    base.mkdir()
+    monkeypatch.setenv("RSNA_ROOTS", str(base))
+    monkeypatch.setenv("RSNA_REGISTRY", str(base / "registry.sqlite"))
+    monkeypatch.setenv("RSNA_RUNS", str(base / "runs"))

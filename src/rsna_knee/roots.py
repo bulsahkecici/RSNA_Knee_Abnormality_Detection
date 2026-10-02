@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +28,21 @@ class RunRoots:
 
 
 def roots_for(synthetic: bool) -> RunRoots:
+    override = os.environ.get("RSNA_ROOTS")
+    if not synthetic and override:
+        base = Path(override)
+        return RunRoots(
+            synthetic=False,
+            state=base,
+            folds=base / "folds.csv",
+            labels=base / "labels",
+            cache=base / "cache",
+            runs=base / "runs",
+            submissions=base / "submissions",
+            registry=Path(os.environ["RSNA_REGISTRY"]) if os.environ.get("RSNA_REGISTRY") else base / "registry.sqlite",
+            control=base / "control.json",
+            lock=base / "controller.lock",
+        )
     if synthetic:
         base = ROOT / "state" / "synthetic"
         return RunRoots(

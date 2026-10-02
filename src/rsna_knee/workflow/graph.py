@@ -146,22 +146,61 @@ _INPUT_KEYS = {
 }
 
 
+_ARTIFACT_FILES = {
+    "config": ("config",),
+    "metadata": ("metadata",),
+    "folds": ("folds",),
+    "labels": ("labels",),
+    "cache": ("cache_manifest", "cache_index"),
+    "train": ("checkpoint",),
+    "audit": ("audit",),
+}
+
+
 def input_hash_for(name: str, state: PipelineState) -> str:
     blob = {key: state.hashes.get(key) for key in _INPUT_KEYS.get(name, ())}
     blob["synthetic"] = state.synthetic
     blob["profile"] = state.profile
+    for key in _INPUT_KEYS.get(name, ()):
+        for artifact in _ARTIFACT_FILES.get(key, ()):
+            raw = state.artifacts.get(artifact)
+            if not raw:
+                continue
+            path = Path(raw)
+            blob[f"file:{artifact}"] = sha256_file(path) if path.is_file() else "missing"
     return sha256_json(blob)
 
 
-def control_requests_pause(state: PipelineState) -> bool:
+def _read_control(state: PipelineState) -> dict[str, Any]:
     path = roots_for(state.synthetic).control
     if not path.is_file():
-        return False
+        return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return False
-    return data.get("command") == "pause" and data.get("run_id") == state.run_id
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def control_requests_pause(state: PipelineState) -> bool:
+    data = _read_control(state)
+    return data.get("command") == "pause" and data.get("run_id") == state.run_id and not data.get("consumed")
+
+
+def consume_pause(state: PipelineState) -> None:
+    path = roots_for(state.synthetic).control
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"run_id": state.run_id, "command": "pause", "consumed": True, "acked": True}),
+        encoding="utf-8",
+    )
+
+
+def release_consumed_pause(state: PipelineState) -> None:
+    data = _read_control(state)
+    if data.get("run_id") == state.run_id and data.get("consumed"):
+        roots_for(state.synthetic).control.unlink(missing_ok=True)
+        state.pause_requested = False
 
 
 def invalidate_from(state: PipelineState, name: str, names: list[str]) -> None:
@@ -184,9 +223,12 @@ def sequential_run(
     try:
         if not state.fencing_token:
             state.fencing_token = new_fencing_token(state.run_id)
+        if state.resume:
+            release_consumed_pause(state)
         registry.upsert_run(state.run_id, state.profile, state.stage, state.model_dump(), state.synthetic)
         for name, fn in fns:
             if paused() or control_requests_pause(state):
+                consume_pause(state)
                 state.stage = Stage.PAUSED
                 state.pause_requested = True
                 state.next_action_tr = "Duraklatma kaydı alındı. Aynı run_id ile rsna pipeline run --resume devam eder."
@@ -211,11 +253,18 @@ def sequential_run(
 
 def new_state(profile: str, synthetic: bool = False, run_id: str | None = None) -> PipelineState:
     rid = run_id or new_run_id("syn" if synthetic else "run")
+    from rsna_knee.paths import CONFIG_DIR
+
+    identity: dict[str, Any] = {"profile": profile, "synthetic": synthetic}
+    config_path = CONFIG_DIR / "default.yaml"
+    if config_path.is_file():
+        identity["config_sha256"] = sha256_file(config_path)
     return PipelineState(
         run_id=rid,
         profile=profile,
         synthetic=synthetic,
         stage=Stage.CREATED,
-        hashes={"config": sha256_json({"profile": profile, "synthetic": synthetic})},
+        hashes={"config": sha256_json(identity)},
+        artifacts={"config": str(config_path)} if config_path.is_file() else {},
         next_action_tr="rsna doctor ardından rsna smoke --synthetic",
     )

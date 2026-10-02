@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from rsna_knee.hashing import sha256_file
+from rsna_knee.models.weights import weight_trust
 
 ENCODER_NAME = "dinov2_vits14"
 EMBED_DIM = 384
@@ -182,12 +182,15 @@ def load_dinov2_vits14(checkpoint: str | Path, img_size: int = 224) -> Dinov2ViT
             "DINOv2 architecture mismatch. "
             f"missing={list(missing)[:12]} unexpected={list(unexpected)[:12]}"
         )
+    trust = weight_trust(path)
     model.provenance = {
         "encoder": ENCODER_NAME,
-        "pretrained": True,
+        "pretrained": bool(trust["official"]),
+        "allowlisted": bool(trust["allowlisted"]),
         "checkpoint": str(path),
-        "sha256": sha256_file(path),
+        "sha256": trust["sha256"],
         "img_size": img_size,
         "notes": notes,
+        "weights_reason": trust["reason"],
     }
     return model

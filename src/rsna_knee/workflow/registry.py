@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -68,7 +69,8 @@ CREATE TABLE IF NOT EXISTS submissions (
 class Registry:
     def __init__(self, path: Path | None = None):
         ensure_runtime_dirs()
-        self.path = path or (STATE_DIR / "registry.sqlite")
+        env = os.environ.get("RSNA_REGISTRY")
+        self.path = path or (Path(env) if env else STATE_DIR / "registry.sqlite")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
@@ -187,6 +189,27 @@ class Registry:
                        VALUES (?,?,?,?,?,?,?,?)""",
                     (request_id, run_id, kernel, version, status, blob, now, now),
                 )
+
+    def open_submission(self, kernel: str, version: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """SELECT * FROM submissions
+               WHERE kernel=? AND version=? AND status IN ('SUBMITTING', 'UNKNOWN')
+               ORDER BY updated_ts DESC""",
+            (kernel, str(version)),
+        ).fetchone()
+        if not row:
+            return None
+        rec = json.loads(row["receipt_json"])
+        rec.update(
+            {
+                "request_id": row["request_id"],
+                "status": row["status"],
+                "run_id": row["run_id"],
+                "kernel": row["kernel"],
+                "version": row["version"],
+            }
+        )
+        return rec
 
     def submission_for_kernel(self, kernel: str, version: str) -> dict[str, Any] | None:
         row = self._conn.execute(
