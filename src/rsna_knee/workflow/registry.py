@@ -188,6 +188,25 @@ class Registry:
                     (request_id, run_id, kernel, version, status, blob, now, now),
                 )
 
+    def submission_for_kernel(self, kernel: str, version: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM submissions WHERE kernel=? AND version=? AND status='SUBMITTED'",
+            (kernel, str(version)),
+        ).fetchone()
+        if not row:
+            return None
+        rec = json.loads(row["receipt_json"])
+        rec.update(
+            {
+                "request_id": row["request_id"],
+                "status": row["status"],
+                "run_id": row["run_id"],
+                "kernel": row["kernel"],
+                "version": row["version"],
+            }
+        )
+        return rec
+
     def get_submission(self, request_id: str) -> dict[str, Any] | None:
         row = self._conn.execute("SELECT * FROM submissions WHERE request_id=?", (request_id,)).fetchone()
         if not row:

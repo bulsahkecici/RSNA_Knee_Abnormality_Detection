@@ -29,7 +29,7 @@ def _lmstudio(base: str) -> dict[str, Any]:
         return {"ok": False, "error": str(exc), "base_url": base}
 
 
-def doctor() -> dict[str, Any]:
+def doctor(*, probe_remote: bool = True) -> dict[str, Any]:
     cfg = load_config()
     snap = snapshot()
     cuda = False
@@ -59,12 +59,12 @@ def doctor() -> dict[str, Any]:
         "mps": mps,
         "cuda_expected_on_macos": False,
         "kaggle_cli": kaggle,
-        "lmstudio": _lmstudio(cfg.lmstudio.base_url),
+        "lmstudio": _lmstudio(cfg.lmstudio.base_url) if probe_remote else {"ok": None, "probed": False},
         "preferred_lm_model": cfg.lmstudio.preferred_model_id,
         "providers": {
             "local": LocalProvider().capabilities().as_dict(),
             "colab": ColabProvider().capabilities().as_dict(),
-            "kaggle": KaggleProvider().capabilities().as_dict(),
+            "kaggle": KaggleProvider().capabilities(probe=probe_remote).as_dict(),
         },
         "repo": str(find_repo_root()),
         "notes": [

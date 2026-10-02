@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from rsna_knee.labels.validate import gold_to_training, parse_json_content, validate_extraction
-from rsna_knee.ontology import TARGET_COLUMNS
-from rsna_knee.training.losses import masked_bce_with_logits
 import numpy as np
 import pytest
 
+from rsna_knee.labels.validate import gold_to_training, parse_json_content, validate_extraction
+from rsna_knee.ontology import TARGET_COLUMNS
+from rsna_knee.training.losses import masked_bce_with_logits
 
 SCHEMA_MIN = {
     "type": "object",

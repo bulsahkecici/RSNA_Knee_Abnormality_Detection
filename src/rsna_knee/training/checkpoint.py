@@ -47,7 +47,7 @@ def torch_save(path: Path, obj: dict[str, Any]) -> Path:
 def torch_load(path: Path, map_location: str = "cpu") -> dict[str, Any]:
     import torch
 
-    return torch.load(path, map_location=map_location)
+    return torch.load(path, map_location=map_location, weights_only=False)
 
 
 def rng_state() -> dict[str, Any]:

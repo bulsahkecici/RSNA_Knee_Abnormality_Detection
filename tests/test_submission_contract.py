@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-
 import numpy as np
 import pytest
 
 from rsna_knee.errors import FakeResultError
 from rsna_knee.evaluation.metrics import per_class_auc, reject_fake_production
-from rsna_knee.ontology import TARGET_COLUMNS, STUDY_ID_COL
+from rsna_knee.ontology import STUDY_ID_COL, TARGET_COLUMNS
 from rsna_knee.submission.infer import write_submission_csv
 from rsna_knee.submission.validate import validate_submission
 
@@ -15,7 +14,7 @@ def test_undefined_auc_not_half():
     y = np.ones((10, 12))
     p = np.random.default_rng(0).random((10, 12))
     m = per_class_auc(y, p)
-    for name, rec in m["per_class"].items():
+    for _name, rec in m["per_class"].items():
         assert rec["undefined"] is True
         assert rec["auc"] is None
     assert m["macro_auc"] is None

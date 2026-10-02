@@ -8,7 +8,7 @@ from typing import Any
 
 import jsonschema
 
-from rsna_knee.ontology import TARGET_COLUMNS, LabelState, ONTOLOGY_VERSION
+from rsna_knee.ontology import ONTOLOGY_VERSION, TARGET_COLUMNS, LabelState
 from rsna_knee.paths import SCHEMA_DIR
 
 VALID_STATES = {s.value for s in LabelState}
@@ -41,8 +41,17 @@ def evidence_in_report(span: str, report: str) -> bool:
     return span in report
 
 
-def validate_extraction(payload: dict[str, Any], report: str, schema: dict[str, Any] | None = None) -> list[str]:
+def validate_extraction(
+    payload: dict[str, Any],
+    report: str,
+    schema: dict[str, Any] | None = None,
+    *,
+    expected_uid: str | None = None,
+) -> list[str]:
     errors: list[str] = []
+    if expected_uid is not None and payload.get("StudyInstanceUID") not in {None, expected_uid}:
+        errors.append("uid_mismatch")
+        return errors
     schema = schema or load_schema()
     try:
         jsonschema.validate(payload, schema)

@@ -6,6 +6,7 @@ tests and CLI stay functional. Completed hashes are checked before advancing.
 
 from __future__ import annotations
 
+import json
 import signal
 from collections.abc import Callable
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Any
 
 from rsna_knee.hashing import sha256_file, sha256_json
 from rsna_knee.paths import STATE_DIR
+from rsna_knee.roots import roots_for
 from rsna_knee.workflow.locks import ControllerLock, new_fencing_token, new_run_id
 from rsna_knee.workflow.registry import Registry
 from rsna_knee.workflow.state import PipelineState, Stage
@@ -121,6 +123,54 @@ def invalidate_if_changed(prev: str | None, current: str | None) -> bool:
     return prev != current
 
 
+STOP_STAGES = {
+    Stage.FAILED,
+    Stage.NEEDS_AUTH,
+    Stage.NEEDS_RUNTIME,
+    Stage.QUEUED,
+    Stage.PAUSED,
+    Stage.BLOCKED,
+}
+
+_INPUT_KEYS = {
+    "preflight": ("config",),
+    "metadata": ("config",),
+    "folds": ("metadata",),
+    "labels": ("metadata", "folds"),
+    "cache": ("folds",),
+    "runtime": ("config",),
+    "train": ("cache", "folds", "labels"),
+    "evaluate": ("train",),
+    "audit": ("train",),
+    "package": ("audit",),
+}
+
+
+def input_hash_for(name: str, state: PipelineState) -> str:
+    blob = {key: state.hashes.get(key) for key in _INPUT_KEYS.get(name, ())}
+    blob["synthetic"] = state.synthetic
+    blob["profile"] = state.profile
+    return sha256_json(blob)
+
+
+def control_requests_pause(state: PipelineState) -> bool:
+    path = roots_for(state.synthetic).control
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return data.get("command") == "pause" and data.get("run_id") == state.run_id
+
+
+def invalidate_from(state: PipelineState, name: str, names: list[str]) -> None:
+    if name not in names:
+        return
+    for later in names[names.index(name) :]:
+        state.stage_records.pop(later, None)
+
+
 def sequential_run(
     state: PipelineState,
     registry: Registry,
@@ -128,28 +178,35 @@ def sequential_run(
     lock: ControllerLock | None = None,
 ) -> PipelineState:
     _install_sigint()
-    own_lock = lock or ControllerLock()
-    acquired = lock is None
-    if acquired:
-        own_lock.acquire()
+    own_lock = lock or ControllerLock(roots_for(state.synthetic).lock)
+    own_lock.acquire()
+    names = [name for name, _fn in fns]
     try:
         if not state.fencing_token:
             state.fencing_token = new_fencing_token(state.run_id)
         registry.upsert_run(state.run_id, state.profile, state.stage, state.model_dump(), state.synthetic)
         for name, fn in fns:
-            if paused():
+            if paused() or control_requests_pause(state):
                 state.stage = Stage.PAUSED
-                state.next_action_tr = "SIGINT alındı. Aynı run_id ile rsna pipeline run --resume devam eder."
+                state.pause_requested = True
+                state.next_action_tr = "Duraklatma kaydı alındı. Aynı run_id ile rsna pipeline run --resume devam eder."
                 registry.upsert_run(state.run_id, state.profile, state.stage, state.model_dump(), state.synthetic)
                 return state
+            incoming = input_hash_for(name, state)
+            record = state.stage_records.get(name) or {}
+            if state.resume and record.get("status") == "complete" and record.get("input_hash") == incoming:
+                continue
+            if record and record.get("input_hash") not in {None, incoming}:
+                invalidate_from(state, name, names)
             state = fn(state, registry)
             registry.upsert_run(state.run_id, state.profile, state.stage, state.model_dump(), state.synthetic)
-            if state.stage in {Stage.FAILED, Stage.NEEDS_AUTH, Stage.NEEDS_RUNTIME, Stage.QUEUED, Stage.PAUSED}:
+            if state.stage in STOP_STAGES:
                 return state
+            state.stage_records[name] = {"status": "complete", "input_hash": incoming}
+            registry.upsert_run(state.run_id, state.profile, state.stage, state.model_dump(), state.synthetic)
         return state
     finally:
-        if acquired:
-            own_lock.release()
+        own_lock.release()
 
 
 def new_state(profile: str, synthetic: bool = False, run_id: str | None = None) -> PipelineState:

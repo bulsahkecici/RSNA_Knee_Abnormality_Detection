@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from rsna_knee.hashing import sha256_file, sha256_json
+from rsna_knee.runtime.jobs import validate_job
 from rsna_knee.runtime.transport import FileTransport
 from rsna_knee.training.train import train_tiny
-from rsna_knee.workflow.state import ResultMetrics, ResultRecord, SCHEMA_VERSION
+from rsna_knee.workflow.state import SCHEMA_VERSION, ResultMetrics, ResultRecord
 
 
 def handshake() -> dict[str, Any]:
@@ -55,21 +56,50 @@ def accept_job(job: dict[str, Any], expected_token: str | None) -> dict[str, Any
     return job
 
 
-def run_job(job: dict[str, Any], transport: FileTransport, items: list[dict[str, Any]] | None = None) -> ResultRecord:
-    hs = handshake()
-    transport.write_heartbeat(job["job_id"], job["attempt_id"], {"stage": "start", "handshake": hs})
+def run_job(
+    job: dict[str, Any],
+    transport: FileTransport,
+    items: list[dict[str, Any]] | None = None,
+    *,
+    expected_token: str | None = None,
+) -> ResultRecord:
+    errors = validate_job(job, expected_token=expected_token)
     synthetic = bool(job.get("synthetic"))
+    encoder = job.get("encoder")
+    hs = handshake()
+    exit_reason = "ok"
+    checkpoint_uris: list[str] = []
     metrics: dict[str, Any]
-    if items:
-        out = train_tiny(items, epochs=1, ckpt_dir=None)
-        metrics = {
-            "kind": "synthetic" if synthetic else "real",
-            "macro_auc": None,
-            "notes": "tiny train step completed; AUC not claimed without labeled eval",
-            "steps": out["step"],
-        }
+    if errors:
+        exit_reason = "rejected"
+        metrics = {"kind": "unavailable", "macro_auc": None, "notes": ",".join(errors)}
+    elif items is None:
+        exit_reason = "no_items"
+        metrics = {"kind": "unavailable", "macro_auc": None, "notes": "worker has no studies"}
+    elif not synthetic and encoder != "tiny_test_encoder":
+        ckpt = job.get("checkpoint")
+        if not ckpt or not Path(ckpt).is_file():
+            exit_reason = "no_checkpoint"
+            metrics = {"kind": "unavailable", "macro_auc": None, "notes": "production job has no checkpoint"}
+        else:
+            exit_reason = "ok"
+            checkpoint_uris = [str(ckpt)]
+            metrics = {"kind": "real", "macro_auc": None, "notes": "checkpoint present; AUC is not invented here"}
     else:
-        metrics = {"kind": "unavailable" if not synthetic else "synthetic", "macro_auc": None, "notes": "no items"}
+        out = train_tiny(items, epochs=1, ckpt_dir=None)
+        if out.get("step", 0) <= 0:
+            exit_reason = "no_checkpoint"
+            metrics = {"kind": "unavailable", "macro_auc": None, "notes": "training produced no step"}
+        else:
+            metrics = {
+                "kind": "synthetic" if synthetic else "real",
+                "macro_auc": None,
+                "notes": "tiny test step only; not a DINOv2 result",
+                "steps": out["step"],
+            }
+    if exit_reason == "ok" and not synthetic and not checkpoint_uris and encoder != "tiny_test_encoder":
+        exit_reason = "no_checkpoint"
+    transport.write_heartbeat(job["job_id"], job["attempt_id"], {"stage": exit_reason, "handshake": hs})
     rec = ResultRecord(
         schema_version=SCHEMA_VERSION,
         job_id=job["job_id"],
@@ -78,9 +108,9 @@ def run_job(job: dict[str, Any], transport: FileTransport, items: list[dict[str,
         fencing_token=job["fencing_token"],
         handshake=hs,
         metrics=ResultMetrics.model_validate(metrics),
-        checkpoint_uris=[],
+        checkpoint_uris=checkpoint_uris,
         artifact_hashes={"job": sha256_json(job)},
-        exit_reason="ok",
+        exit_reason=exit_reason,
     )
     transport.write_result(rec.model_dump())
     return rec

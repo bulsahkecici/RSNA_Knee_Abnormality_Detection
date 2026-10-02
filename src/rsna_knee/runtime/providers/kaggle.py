@@ -17,8 +17,8 @@ def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
 class KaggleProvider:
     name = "kaggle"
 
-    def capabilities(self) -> ProviderCapabilities:
-        quota = self.quota()
+    def capabilities(self, *, probe: bool = True) -> ProviderCapabilities:
+        quota = self.quota() if probe else {"ok": False, "probed": False}
         return ProviderCapabilities(
             name="kaggle",
             supported_gpu_types=["T4", "P100"],  # advertised Kaggle notebook GPUs; verify per-session handshake
@@ -29,7 +29,7 @@ class KaggleProvider:
             remote_execution=True,
             upload_download="kernels_push_output",
             auth_flow="kaggle_json_or_cli_auth",
-            availability_status="cli" if quota.get("ok") else "needs_auth_or_quota",
+            availability_status=("cli" if quota.get("ok") else "not_probed" if not probe else "needs_auth_or_quota"),
             automatic_acquisition=True,
             notes=[
                 "Code competition submit uses: kaggle competitions submit -c SLUG -k KERNEL -v VERSION -m MSG",
@@ -47,7 +47,24 @@ class KaggleProvider:
     def request_gpu(self, gpu_type: str, **kwargs: Any) -> dict[str, Any]:
         if gpu_type in {"A100", "L4", "H100"}:
             return {"status": "unsupported", "gpu": gpu_type, "retryable": False}
-        return {"status": "pending_kernel", "gpu": gpu_type, "retryable": True}
+        from rsna_knee.runtime.kaggle_kernel import prepare_cache_kernel
+
+        prepared = prepare_cache_kernel()
+        return {
+            "status": "handoff",
+            "gpu": gpu_type,
+            "retryable": False,
+            "executed": False,
+            "kernel": None,
+            "push_argv": prepared["push_argv"],
+            "status_argv": prepared["status_argv"],
+            "output_argv": prepared["output_argv"],
+            "kernel_dir": prepared["dir"],
+            "action_tr": (
+                "Kaggle kernel klasörü hazır. kernels push/status/output bu çağrıda çalıştırılmadı. "
+                "Kernel kimliği olmadan pending beklenmez."
+            ),
+        }
 
     def poll(self, handle: dict[str, Any]) -> dict[str, Any]:
         kernel = handle.get("kernel")

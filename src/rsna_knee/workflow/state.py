@@ -32,6 +32,7 @@ class Stage(StrEnum):
     PAUSED = "PAUSED"
     FAILED = "FAILED"
     SCORED = "SCORED"
+    BLOCKED = "BLOCKED"
 
 
 TERMINAL = {Stage.SUBMITTED, Stage.SCORED, Stage.FAILED}
@@ -121,3 +122,5 @@ class PipelineState(BaseModel):
     gpu_actual: str | None = None
     last_heartbeat: float | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
+    stage_records: dict[str, Any] = Field(default_factory=dict)
+    pause_requested: bool = False

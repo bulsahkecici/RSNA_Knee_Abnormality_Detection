@@ -67,7 +67,14 @@ def load_shard(uid: str, root: Path | None = None) -> np.ndarray:
     return np.load(path, mmap_mode="r")
 
 
-def synthetic_study_cache(uid: str, n_slots: int = 3, n_slices: int = 3, size: int = 32, seed: int = 0) -> Path:
+def synthetic_study_cache(
+    uid: str,
+    n_slots: int = 3,
+    n_slices: int = 3,
+    size: int = 32,
+    seed: int = 0,
+    root: Path | None = None,
+) -> Path:
     rng = np.random.default_rng(seed)
     arr = rng.random((n_slots, n_slices, size, size)).astype(np.float32)
-    return write_shard(uid, arr, {"synthetic": True, "size": size, "uid": uid}, dtype="uint8")
+    return write_shard(uid, arr, {"synthetic": True, "size": size, "uid": uid}, root=root, dtype="uint8")

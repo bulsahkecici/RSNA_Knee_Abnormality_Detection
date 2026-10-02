@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from rsna_knee.data.duplicates import duplicate_report_groups
-from rsna_knee.data.folds import assert_group_integrity, assert_no_gold_eval_in_training, create_folds, load_folds
+from rsna_knee.data.folds import (
+    assert_group_integrity,
+    assert_no_gold_eval_in_training,
+    create_folds,
+    load_folds,
+)
 from rsna_knee.errors import LeakageError
 from rsna_knee.ontology import TARGET_COLUMNS
 

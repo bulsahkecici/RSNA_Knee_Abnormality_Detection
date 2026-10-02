@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -47,9 +48,6 @@ class StudyDataset:
     def __len__(self) -> int:
         return len(self.uids)
 
-    def _zeros(self) -> np.ndarray:
-        return np.zeros((self.n_slots, self.n_slices, 1, self.size, self.size), dtype=np.float32)
-
     def __getitem__(self, idx: int) -> dict[str, Any]:
         uid = self.uids[idx]
         try:
@@ -62,10 +60,10 @@ class StudyDataset:
             images = arr
             slot_mask = (images.reshape(images.shape[0], -1).std(axis=1) > 1e-8).astype(np.float32)
             slice_mask = (images.reshape(images.shape[0], images.shape[1], -1).std(axis=2) > 1e-8).astype(np.float32)
-        except FileNotFoundError:
-            images = self._zeros()
-            slot_mask = np.zeros((self.n_slots,), dtype=np.float32)
-            slice_mask = np.zeros((self.n_slots, self.n_slices), dtype=np.float32)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"missing cache shard for {uid}; refusing a silent zero image"
+            ) from exc
         y = np.array([self.labels.get(uid, {}).get(t) if self.labels.get(uid, {}).get(t) is not None else np.nan for t in TARGET_COLUMNS], dtype=np.float32)
         y_mask = np.array([self.masks.get(uid, {}).get(t, 0.0) for t in TARGET_COLUMNS], dtype=np.float32)
         y_weight = np.array([self.weights.get(uid, {}).get(t, 0.0) for t in TARGET_COLUMNS], dtype=np.float32)

@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from filelock import FileLock
+
 from rsna_knee.hashing import sha256_json, sha256_text
 from rsna_knee.labels.lmstudio import LMStudioClient
 from rsna_knee.labels.validate import load_schema, parse_json_content, validate_extraction
@@ -115,6 +117,38 @@ def _messages(report: str, uid: str, system: str) -> list[dict[str, str]]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def split_report(report: str, max_chars: int) -> list[str] | None:
+    """Chunk on paragraph boundaries. A single oversized paragraph is not silently sliced."""
+    if len(report) <= max_chars:
+        return [report]
+    chunks: list[str] = []
+    buf = ""
+    for para in report.split("\n\n"):
+        if len(para) > max_chars:
+            return None
+        if buf and len(buf) + 2 + len(para) > max_chars:
+            chunks.append(buf)
+            buf = para
+        else:
+            buf = para if not buf else f"{buf}\n\n{para}"
+    if buf:
+        chunks.append(buf)
+    return chunks or None
+
+
+def _merge_payloads(uid: str, parts: list[dict[str, Any]]) -> dict[str, Any]:
+    merged: dict[str, Any] = {"StudyInstanceUID": uid, "targets": {}}
+    for name in TARGET_COLUMNS:
+        chosen = {"state": "not_mentioned", "evidence_span": "", "criterion_mapping": "unmentioned"}
+        for part in parts:
+            rec = (part.get("targets") or {}).get(name) or {}
+            if rec.get("state") not in {None, "", "not_mentioned"}:
+                chosen = rec
+                break
+        merged["targets"][name] = chosen
+    return merged
+
+
 def extract_one(
     client: LMStudioClient,
     *,
@@ -127,54 +161,94 @@ def extract_one(
     temperature: float = 0.2,
     max_retries: int = 2,
     rng: random.Random | None = None,
+    context_tokens: int = 8192,
+    output_tokens: int = 2048,
+    thinking: str = "off",
+    use_cache: bool = True,
 ) -> dict[str, Any]:
     rng = rng or random.Random()
     system = (PROMPT_DIR / "report_extract.md").read_text(encoding="utf-8")
     p_hash = prompt_hash()
-    key = resume_key(uid, report, model_id, model_revision, p_hash)
-    cached = store.get(key)
+    revision = model_revision or ""
+    key = resume_key(uid, report, model_id, revision, p_hash)
+    cached = store.get(key) if use_cache else None
     if cached and cached["status"] == "ok":
         payload = json.loads(cached["payload_json"])
         return {"status": "ok", "cached": True, "payload": payload, "resume_key": key}
+
+    max_chars = max(512, context_tokens - output_tokens - 256) * 4
+    chunks = split_report(report, max_chars)
+    if chunks is None:
+        store.quarantine(uid, key, "report_exceeds_context", None)
+        return {"status": "quarantine", "reason": "report_exceeds_context", "resume_key": key}
 
     schema = load_schema()
     schema_for_api = json.loads((SCHEMA_DIR / "report_labels.json").read_text(encoding="utf-8"))
     last_err = "unknown"
     raw = None
-    for attempt in range(max_retries + 1):
-        extra = {}
-        try:
-            if json_mode == "json_schema":
-                resp = client.chat_completions(
-                    model=model_id,
-                    messages=_messages(report, uid, system),
-                    json_schema=schema_for_api,
-                    temperature=temperature,
-                    extra=extra,
-                )
-            elif json_mode == "json_object":
-                resp = client.chat_completions(
-                    model=model_id,
-                    messages=_messages(report, uid, system),
-                    json_object=True,
-                    temperature=temperature,
-                )
-            else:
-                store.quarantine(uid, key, "json_mode_unsupported", None)
-                return {"status": "quarantine", "reason": "json_mode_unsupported", "resume_key": key}
-            raw = resp["choices"][0]["message"].get("content") or ""
-            payload = parse_json_content(raw)
-            payload.setdefault("StudyInstanceUID", uid)
-            errors = validate_extraction(payload, report, schema)
-            if not errors:
-                store.put(key, uid, sha256_text(report), model_id, model_revision, p_hash, payload, "ok", [])
-                return {"status": "ok", "cached": False, "payload": payload, "resume_key": key}
-            last_err = ";".join(errors)
-        except Exception as exc:  # noqa: BLE001
-            last_err = str(exc)
-        time.sleep((0.25 * (2**attempt)) * (0.5 + rng.random()))
+    modes = ["json_schema", "json_object"] if json_mode == "json_schema" else [json_mode]
+    lock = FileLock(str(store.path) + ".llm.lock", timeout=3600)
+    with lock:
+        for attempt in range(max_retries + 1):
+            try:
+                payloads: list[dict[str, Any]] = []
+                used_mode = None
+                for chunk in chunks:
+                    resp = None
+                    chunk_err = "json_mode_unsupported"
+                    for mode in modes:
+                        if mode == "json_schema":
+                            resp = client.chat_completions(
+                                model=model_id,
+                                messages=_messages(chunk, uid, system),
+                                json_schema=schema_for_api,
+                                temperature=temperature,
+                                max_tokens=output_tokens,
+                                extra={"thinking": thinking} if thinking else None,
+                            )
+                        elif mode == "json_object":
+                            resp = client.chat_completions(
+                                model=model_id,
+                                messages=_messages(chunk, uid, system),
+                                json_object=True,
+                                temperature=temperature,
+                                max_tokens=output_tokens,
+                            )
+                        else:
+                            chunk_err = "json_mode_unsupported"
+                            resp = None
+                            continue
+                        used_mode = mode
+                        raw = resp["choices"][0]["message"].get("content") or ""
+                        try:
+                            payloads.append(parse_json_content(raw))
+                            chunk_err = ""
+                            break
+                        except ValueError as exc:
+                            chunk_err = str(exc)
+                            resp = None
+                    if chunk_err:
+                        raise ValueError(chunk_err)
+                payload = payloads[0] if len(payloads) == 1 else _merge_payloads(uid, payloads)
+                if not payload.get("StudyInstanceUID"):
+                    payload["StudyInstanceUID"] = uid
+                errors = validate_extraction(payload, report, schema, expected_uid=uid)
+                if not errors:
+                    store.put(key, uid, sha256_text(report), model_id, revision or None, p_hash, payload, "ok", [])
+                    return {
+                        "status": "ok",
+                        "cached": False,
+                        "payload": payload,
+                        "resume_key": key,
+                        "json_mode": used_mode,
+                        "revision_source": "lmstudio_model_record",
+                    }
+                last_err = ";".join(errors)
+            except Exception as exc:  # noqa: BLE001
+                last_err = str(exc)
+            time.sleep((0.25 * (2**attempt)) * (0.5 + rng.random()))
     store.quarantine(uid, key, last_err, raw)
-    store.put(key, uid, sha256_text(report), model_id, model_revision, p_hash, {}, "quarantine", [last_err])
+    store.put(key, uid, sha256_text(report), model_id, revision or None, p_hash, {}, "quarantine", [last_err])
     return {"status": "quarantine", "reason": last_err, "resume_key": key}
 
 

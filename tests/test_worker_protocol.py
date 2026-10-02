@@ -34,6 +34,7 @@ def test_fencing_rejects_wrong_token(tmp_path):
     assert accept_job(job, "tok-other") is None
     rec = run_job(job, FileTransport(tmp_path), items=None)
     assert rec.fencing_token == "tok-correct"
+    assert rec.exit_reason == "no_items"
     again = FileTransport(tmp_path).read_result("j1", "a1")
     assert again["job_id"] == "j1"
 

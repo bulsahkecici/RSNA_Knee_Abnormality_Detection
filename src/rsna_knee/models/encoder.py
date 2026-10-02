@@ -29,47 +29,21 @@ class TinyEncoder:
 def load_encoder(kind: str = "tiny", checkpoint: str | None = None, **kwargs: Any):
     if kind in {"tiny", "test"}:
         return TinyEncoder(seed=int(kwargs.get("seed", 0)))
-    if kind in {"dinov2", "dinov2_small"}:
-        try:
-            import torch.nn as nn  # noqa: F401
-        except ImportError as exc:
-            raise RuntimeError("torch required for DINOv2 encoder") from exc
-        return TorchDinoStub(checkpoint=checkpoint, **kwargs)
+    if kind in {"dinov2", "dinov2_small", "dinov2_vits14"}:
+        if not checkpoint:
+            raise FileNotFoundError(
+                "DINOv2 ViT-S/14 requires the pretrained checkpoint. A conv stub is not a production encoder."
+            )
+        from rsna_knee.models.dinov2 import load_dinov2_vits14
+
+        return load_dinov2_vits14(checkpoint, img_size=int(kwargs.get("img_size", 224)))
     raise ValueError(kind)
 
 
 class TorchDinoStub:
-    """Loads a local checkpoint if present; otherwise a tiny conv stand-in.
-
-    This stand-in is never reported as a DINOv2 competition result.
-    """
-
-    name = "dinov2_small_or_stub"
-    embed_dim = 384
+    """Removed production path. Constructing it is an error, including strict=False loads."""
 
     def __init__(self, checkpoint: str | None = None, **kwargs: Any):
-        import torch
-        import torch.nn as nn
-
-        self.torch = torch
-        self.net = nn.Sequential(
-            nn.Conv2d(3, 16, 3, stride=2, padding=1),
-            nn.GELU(),
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(16, self.embed_dim),
+        raise RuntimeError(
+            "TorchDinoStub is not a DINOv2 encoder. Use load_dinov2_vits14 with the pretrained checkpoint."
         )
-        self.is_stub = True
-        if checkpoint:
-            try:
-                state = torch.load(checkpoint, map_location="cpu")
-                self.net.load_state_dict(state, strict=False)
-                self.is_stub = False
-            except Exception:
-                self.is_stub = True
-
-    def parameters(self):
-        return self.net.parameters()
-
-    def __call__(self, images):
-        return self.net(images)

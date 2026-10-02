@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from rsna_knee.config import load_experiment
 from rsna_knee.paths import ROOT
 

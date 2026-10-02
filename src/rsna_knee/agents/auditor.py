@@ -13,24 +13,38 @@ from rsna_knee.submission.validate import validate_submission
 def audit_run(payload: dict[str, Any], *, production: bool = False) -> dict[str, Any]:
     gates: dict[str, Any] = {}
     hashes = payload.get("hashes") or {}
-    gates["metadata_schema"] = "PASS" if hashes.get("metadata") or payload.get("synthetic") else "BLOCKED"
-    gates["report_criteria"] = "PASS" if payload.get("ontology_confirmed") or payload.get("synthetic") else "BLOCKED"
-    gates["gold_leakage"] = payload.get("leakage", "PASS")
-    gates["cache_parity"] = payload.get("cache_parity", "PASS" if payload.get("synthetic") else "BLOCKED")
+    gates["metadata_schema"] = "PASS" if hashes.get("metadata") else "BLOCKED"
+    gates["report_criteria"] = "PASS" if payload.get("ontology_confirmed") is True else "BLOCKED"
+    gates["gold_leakage"] = payload.get("leakage") or "BLOCKED"
+    gates["cache_parity"] = payload.get("cache_parity") or "BLOCKED"
     metrics = payload.get("metrics") or {}
     try:
         reject_fake_production(metrics, production=production)
-        gates["metrics"] = "PASS" if metrics.get("kind") in {"real", "synthetic"} else "BLOCKED"
-        if production and metrics.get("kind") != "real":
+        if metrics.get("kind") == "real" and payload.get("checkpoint_sha256") and payload.get("run_id"):
+            gates["metrics"] = "PASS"
+        elif production:
             gates["metrics"] = "FAIL"
+        elif metrics.get("kind") == "synthetic":
+            gates["metrics"] = "FAIL" if production else "BLOCKED"
+        else:
+            gates["metrics"] = "BLOCKED"
     except Exception as exc:  # noqa: BLE001
         gates["metrics"] = f"FAIL:{exc}"
-    gates["resources"] = "PASS"
-    gates["external_data"] = payload.get("external_data", "PASS")
-    gates["offline_runtime"] = payload.get("offline", "PASS" if payload.get("synthetic") else "BLOCKED")
+    identity = payload.get("identity_errors")
+    if identity is None:
+        gates["identity"] = "BLOCKED"
+    elif identity:
+        gates["identity"] = "FAIL"
+    else:
+        gates["identity"] = "PASS"
+    gates["resources"] = payload.get("resources") or "BLOCKED"
+    gates["external_data"] = payload.get("external_data") or "BLOCKED"
+    gates["offline_runtime"] = payload.get("offline") or "BLOCKED"
     sub = payload.get("submission_path")
-    if sub:
+    if sub and Path(sub).is_file() and payload.get("identity_errors") == []:
         gates["submission_schema"] = "PASS" if validate_submission(Path(sub)).get("ok") else "FAIL"
+    elif sub:
+        gates["submission_schema"] = "FAIL"
     else:
         gates["submission_schema"] = "BLOCKED"
     values = list(gates.values())

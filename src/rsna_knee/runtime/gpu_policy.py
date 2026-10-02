@@ -5,9 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from rsna_knee.clock import Clock, WALL
+from rsna_knee.clock import WALL, Clock
 from rsna_knee.config import AllocationConfig
-
 
 AUTH_STATUSES = {"auth_failure", "needs_auth", "balance_exhausted", "invalid_request"}
 UNAVAILABLE = {"unavailable", "unsupported"}
@@ -56,6 +55,19 @@ class GpuAllocator:
             return AcquisitionResult(status="duplicate_prevented", gpu=None, next_action_tr="Açık bir runtime isteği var; yenisini açmayın.")
         self.inflight.add("runtime")
         try:
+            if not caps.request or not caps.automatic_acquisition:
+                gpu = order[0] if order else None
+                handle = self.provider.request_gpu(gpu) if gpu else {"status": "handoff"}
+                return AcquisitionResult(
+                    status=handle.get("status", "handoff"),
+                    gpu=handle.get("gpu", gpu),
+                    handle=handle,
+                    waited_seconds=0.0,
+                    attempts=[{"gpu": gpu, "status": handle.get("status"), "waited": 0}],
+                    fencing_token=self.fencing_token,
+                    next_action_tr=handle.get("action_tr")
+                    or "Desteklenen allocation API yok. 300s bekleme uygulanmaz.",
+                )
             for gpu in order:
                 if self.clock.monotonic() >= total_deadline:
                     break
@@ -103,8 +115,41 @@ class GpuAllocator:
                 if status in RETRYABLE or status == "pending_kernel":
                     waited = self._wait_pending(handle, gpu, total_deadline)
                     attempts[-1]["waited"] = waited
+                    if handle.get("_auth_stop"):
+                        return AcquisitionResult(
+                            status="auth_failure",
+                            gpu=None,
+                            handle=handle["_auth_stop"],
+                            waited_seconds=self.clock.monotonic() - t0,
+                            attempts=attempts,
+                            fencing_token=self.fencing_token,
+                            next_action_tr="Poll kimlik veya bakiye hatası verdi. Yeni tahsis açılmaz.",
+                        )
+                    if handle.get("_ambiguous_pending"):
+                        return AcquisitionResult(
+                            status="ambiguous_pending",
+                            gpu=gpu,
+                            handle=handle,
+                            waited_seconds=self.clock.monotonic() - t0,
+                            attempts=attempts,
+                            fencing_token=self.fencing_token,
+                            next_action_tr=(
+                                "İptal desteklenmiyor ve istek hâlâ pending. "
+                                "Önceki istek açık bırakılarak yeni allocation başlatılmaz."
+                            ),
+                        )
                     polled = self.provider.poll(handle)
                     pst = polled.get("status")
+                    if pst in AUTH_STATUSES:
+                        return AcquisitionResult(
+                            status="auth_failure",
+                            gpu=None,
+                            handle=polled,
+                            waited_seconds=self.clock.monotonic() - t0,
+                            attempts=attempts,
+                            fencing_token=self.fencing_token,
+                            next_action_tr="Poll kimlik veya bakiye hatası verdi. Yeni tahsis açılmaz.",
+                        )
                     if pst in {"allocated", "ready"}:
                         # Allocation after the candidate/total deadline is fenced.
                         late = (
@@ -150,8 +195,11 @@ class GpuAllocator:
         while True:
             now = self.clock.monotonic()
             if now >= per_deadline or now >= total_deadline:
-                if hasattr(self.provider, "cancel"):
+                can_cancel = bool(self.provider.capabilities().cancel) and hasattr(self.provider, "cancel")
+                if can_cancel:
                     self.provider.cancel(handle)
+                else:
+                    handle["_ambiguous_pending"] = True
                 break
             retry_after = handle.get("retry_after")
             sleep_s = float(retry_after) if (self.cfg.respect_retry_after and retry_after) else float(interval)
@@ -161,6 +209,9 @@ class GpuAllocator:
             self.clock.sleep(sleep_s)
             polled = self.provider.poll(handle)
             handle.update(polled)
+            if polled.get("status") in AUTH_STATUSES:
+                handle["_auth_stop"] = polled
+                break
             if polled.get("status") not in RETRYABLE and polled.get("status") != "pending_kernel":
                 break
         return self.clock.monotonic() - start
@@ -169,10 +220,20 @@ class GpuAllocator:
 class ScriptedProvider:
     """Test double. Production code never uses this unless synthetic=True."""
 
-    def __init__(self, script: dict[str, list[dict[str, Any]]], supported: list[str] | None = None):
+    def __init__(
+        self,
+        script: dict[str, list[dict[str, Any]]],
+        supported: list[str] | None = None,
+        *,
+        cancel_supported: bool = True,
+        automatic_acquisition: bool = True,
+    ):
         self.script = {k: list(v) for k, v in script.items()}
         self.supported = supported or list(script.keys())
+        self.cancel_supported = cancel_supported
+        self.automatic_acquisition = automatic_acquisition
         self.cancels: list[dict[str, Any]] = []
+        self.requested: list[str] = []
 
     def capabilities(self):
         from rsna_knee.runtime.providers.base import ProviderCapabilities
@@ -183,12 +244,12 @@ class ScriptedProvider:
             request=True,
             start=True,
             poll=True,
-            cancel=True,
+            cancel=self.cancel_supported,
             remote_execution=True,
             upload_download="test",
             auth_flow="none",
             availability_status="scripted",
-            automatic_acquisition=True,
+            automatic_acquisition=self.automatic_acquisition,
             notes=["TEST ONLY"],
         )
 
@@ -199,6 +260,7 @@ class ScriptedProvider:
         return dict(q.pop(0))
 
     def request_gpu(self, gpu_type: str, **kwargs: Any) -> dict[str, Any]:
+        self.requested.append(gpu_type)
         return self._next(gpu_type)
 
     def poll(self, handle: dict[str, Any]) -> dict[str, Any]:

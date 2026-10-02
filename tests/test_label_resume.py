@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
+import httpx
+
 from rsna_knee.labels.extract import LabelStore, extract_one, resume_key
 from rsna_knee.labels.lmstudio import LMStudioClient
-import json
-import httpx
 
 
 def _handler(request: httpx.Request) -> httpx.Response:
