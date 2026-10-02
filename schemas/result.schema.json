@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsna-knee.local/schemas/result.schema.json",
+  "title": "RemoteResult",
+  "type": "object",
+  "required": ["schema_version", "job_id", "attempt_id", "fencing_token", "metrics", "exit_reason"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "job_id": {"type": "string"},
+    "run_id": {"type": "string"},
+    "attempt_id": {"type": "string"},
+    "fencing_token": {"type": "string"},
+    "handshake": {"type": "object"},
+    "metrics": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["real", "synthetic", "unavailable"]},
+        "macro_auc": {"type": ["number", "null"]},
+        "per_class": {"type": "object"}
+      }
+    },
+    "checkpoint_uris": {"type": "array", "items": {"type": "string"}},
+    "artifact_hashes": {"type": "object"},
+    "exit_reason": {"type": "string"},
+    "heartbeat_ts": {"type": ["number", "null"]}
+  }
+}

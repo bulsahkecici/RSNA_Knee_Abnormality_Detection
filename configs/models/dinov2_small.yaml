@@ -1,0 +1,16 @@
+name: dinov2_small
+family: dinov2
+variant: vit_small_patch14
+input_size: 224
+patch_size: 14
+embed_dim: 384
+n_slots_pilot: 3
+n_slots_advanced: 6
+n_slices: 3
+n_channels_per_slice: 1
+n_targets: 12
+encoder_source: local_checkpoint_or_timm
+unfreeze: last_block
+notes: >
+  First real vision model. Tiny encoder in tests is not a DINO result.
+  Frozen feature cache is not the same as fine-tune feature cache.

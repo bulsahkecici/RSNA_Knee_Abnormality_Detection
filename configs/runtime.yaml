@@ -1,0 +1,39 @@
+provider: colab
+allocation:
+  preferred_gpu_order: [A100, L4, T4]
+  max_wait_per_gpu_seconds: 300
+  max_total_wait_seconds: 900
+  poll_interval_seconds: 15
+  respect_retry_after: true
+  max_concurrent_runtime_requests: 1
+  skip_unsupported: true
+  accept_usable_allocated_gpu: true
+  automatic_acquisition: capability_gated
+  when_exhausted: queue_and_report
+fallback_training:
+  kaggle_enabled: true
+  local_mps_full_training_enabled: false
+  cpu_full_training_enabled: false
+training:
+  effective_study_batch: 8
+  concurrent_gpu_jobs: 1
+  preserve_model_resolution: true
+  pilot_minutes_per_run: 60
+colab:
+  # Official VS Code extension can provision New Colab Server with a machine type.
+  # There is no documented public headless allocate_gpu() API for terminal Python.
+  automatic_gpu_request: false
+  handoff_mode: vscode_extension_manual
+  extension_id: Google.colab
+  docs:
+    - https://github.com/googlecolab/colab-vscode
+    - https://github.com/googlecolab/colab-vscode/wiki/User-Guide
+kaggle:
+  kernels_push: true
+  kernels_status: true
+  kernels_output: true
+  submit_via: competitions_submit_kernel_version
+transport:
+  controller_sqlite_local_only: true
+  drive_sync_optional: true
+  assume_macos_drive_present: false

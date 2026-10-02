@@ -1,0 +1,26 @@
+resources:
+  local_llm_concurrency: 1
+  max_buildtime_subagents: 2
+  local_process_workers: 1
+  remote_dataloader_workers_pilot: 2
+  prefetch_bounded: true
+  heavy_cache_no_fork_amplify: true
+  ram_guard:
+    measure_physical: true
+    macos_pressure_not_a_hard_guarantee: true
+  gpu:
+    default_concurrent_jobs: 1
+    t4_microbatch: 1
+    l4_microbatch: 2
+    a100_microbatch: 4
+    t4_fp16: true
+    bf16_requires_support_check: true
+  budgets:
+    campaign_job_limit: 8
+    campaign_elapsed_hours: 24
+    campaign_gpu_hours: 12
+    compute_units_unknown_unless_provider_reports: true
+    cu_not_equal_gpu_hours: true
+memory:
+  unified_gb_advertised_this_machine: 36
+  do_not_load_full_pixel_corpus_on_mac: true

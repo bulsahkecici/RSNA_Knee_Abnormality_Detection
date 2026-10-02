@@ -1,0 +1,42 @@
+# Do not send medical reports, raw pixels, secrets, or heavy artifacts to cloud agent context.
+# Local extraction scripts in src/rsna_knee/labels remain the authorized report path.
+# This does not block authorized remote training transfers via the runtime transport.
+
+.env
+.env.*
+**/*kaggle.json
+**/*credentials*
+**/*.pem
+**/*.key
+
+data/metadata/train.csv
+data/metadata/**/*.csv
+data/labels/**
+data/cache/**
+data/raw/**
+data/dicom/**
+**/*.dcm
+**/*.nii
+**/*.nii.gz
+
+artifacts/**
+state/**
+reports/**
+logs/**
+**/*.pt
+**/*.pth
+**/*.ckpt
+**/*.safetensors
+**/*.bin
+**/*.npy
+**/*.npz
+**/*.sqlite
+**/*.db
+**/*.log
+
+.venv/**
+venv/**
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/

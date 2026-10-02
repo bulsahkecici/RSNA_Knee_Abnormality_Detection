@@ -1,0 +1,13 @@
+experiment_id: EXP-004-finetune
+family: OWN
+hypothesis: Last-block unfreeze improves gold-OOF versus the frozen EXP-002 control under identical labels, folds, and resolution.
+control: EXP-002-frozen
+primary_variable: last_block_unfreeze
+architecture: dinov2_small_2p5d
+unfreeze: last_block
+folds: shared
+seed: 2026
+budget_minutes: 60
+preserve_model_resolution: true
+decision_criterion: gold_oof_delta_vs_frozen_with_uncertainty
+status: defined_not_run

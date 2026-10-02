@@ -1,0 +1,47 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Doctor",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/rsna doctor",
+      "problemMatcher": []
+    },
+    {
+      "label": "Synthetic Smoke",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/rsna smoke --synthetic",
+      "problemMatcher": []
+    },
+    {
+      "label": "Labels Pilot",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/rsna labels pilot --limit 100",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run/Resume Pipeline",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/rsna pipeline run --profile pilot --resume",
+      "problemMatcher": []
+    },
+    {
+      "label": "Status",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/rsna status --watch",
+      "problemMatcher": []
+    },
+    {
+      "label": "Open Colab Worker",
+      "type": "shell",
+      "command": "code ${workspaceFolder}/notebooks/02_colab_worker.ipynb || echo 'Open notebooks/02_colab_worker.ipynb and select Google Colab kernel'",
+      "problemMatcher": []
+    },
+    {
+      "label": "Package/Audit",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python -c \"print('rsna audit --run-id RUN && rsna package --run-id RUN')\"",
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+---
+description: Resource, GPU, and credential limits
+globs: src/rsna_knee/runtime/**/*.py,configs/runtime.yaml,configs/resources.yaml
+alwaysApply: false
+---
+
+# Resources
+
+- GPU allocation happens before a kernel starts. `torch.cuda` or `sleep(300)` cannot change it.
+- Preferred order A100 → L4 → T4. Skip unsupported immediately. Pending waits ≤300s/candidate, 900s total.
+- Auth/balance/invalid_request is not GPU scarcity; do not retry as if it were.
+- Late allocations after deadline are fenced. Duplicate inflight runtime requests are blocked.
+- Do not CPU-train the full model for hours. Do not keepalive-circumvent idle GPUs.
+- Secrets never logged. `.env` is not copied into remote bundles.

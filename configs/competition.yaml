@@ -1,0 +1,31 @@
+competition:
+  slug: rsna-knee-abnormality-detection
+  url: https://www.kaggle.com/competitions/rsna-knee-abnormality-detection
+  host_overview: https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/discussion/733343
+  metric: macro_roc_auc
+  n_targets: 12
+  code_competition: true
+  internet_disabled_at_scoring: true
+  notebook_runtime_hours: 9
+  daily_submission_quota: 5
+  final_selections: 2
+  team_size_max: 5
+  winner_license: CC-BY-NC-4.0
+  data_license: MIRA
+  external_data: freely_and_publicly_available_including_pretrained_models
+  snapshot_date: 2026-10-02
+timeline_utc:
+  start: 2026-07-30T23:59:00Z
+  entry_deadline: 2026-10-15T23:59:00Z
+  team_merger_deadline: 2026-10-15T23:59:00Z
+  final_submission_deadline: 2026-10-22T23:59:00Z
+  winners_requirement_deadline: 2026-11-05T23:59:00Z
+hidden_test:
+  described_studies: 1300
+  visible_preview_is_not_final: true
+  visible_preview_count: 3
+submission:
+  filename: submission.csv
+  id_column: StudyInstanceUID
+  via: notebook_kernel
+  csv_only_not_sufficient: true

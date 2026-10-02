@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsna-knee.local/schemas/job.schema.json",
+  "title": "RemoteJob",
+  "type": "object",
+  "required": [
+    "schema_version", "job_id", "run_id", "attempt_id", "stage",
+    "bundle_sha256", "config_hash", "fold_hash", "labels_hash", "cache_hash",
+    "fencing_token", "lease_id"
+  ],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "job_id": {"type": "string"},
+    "run_id": {"type": "string"},
+    "attempt_id": {"type": "string"},
+    "stage": {"type": "string"},
+    "commit_sha": {"type": ["string", "null"]},
+    "bundle_sha256": {"type": "string"},
+    "config_hash": {"type": "string"},
+    "fold_hash": {"type": "string"},
+    "labels_hash": {"type": "string"},
+    "cache_hash": {"type": "string"},
+    "input_uris": {"type": "array", "items": {"type": "string"}},
+    "desired_gpu_profile": {"type": "string"},
+    "budgets": {"type": "object"},
+    "lease_id": {"type": "string"},
+    "fencing_token": {"type": "string"},
+    "synthetic": {"type": "boolean"}
+  }
+}

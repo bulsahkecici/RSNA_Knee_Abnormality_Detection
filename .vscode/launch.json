@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "rsna doctor",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "rsna_knee.cli",
+      "args": ["doctor"],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    },
+    {
+      "name": "rsna smoke",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "rsna_knee.cli",
+      "args": ["smoke", "--synthetic"],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+# Secrets and credentials
+.env
+.env.*
+!.env.example
+**/kaggle.json
+**/*.pem
+**/*.key
+**/credentials.json
+**/.netrc
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Data: medical reports, raw DICOM, caches, heavy artifacts
+data/metadata/*.csv
+data/metadata/*.zip
+data/labels/**
+!data/labels/.gitkeep
+data/cache/**
+!data/cache/.gitkeep
+data/raw/**
+data/dicom/**
+*.dcm
+*.nii
+*.nii.gz
+
+# Artifacts / state / logs
+artifacts/runs/**
+!artifacts/runs/.gitkeep
+artifacts/submissions/**
+!artifacts/submissions/.gitkeep
+state/**
+!state/.gitkeep
+reports/**
+!reports/.gitkeep
+logs/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Checkpoints and model weights
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+*.npy
+*.npz
+*.memmap
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/*.code-workspace
+*.swp
+
+# Bundles
+*.tar
+*.tar.gz
+*.zip
+!tests/fixtures/**/*.zip
+
+# Keep synthetic fixtures
+!tests/fixtures/**

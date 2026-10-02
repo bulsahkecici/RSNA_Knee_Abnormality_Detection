@@ -1,0 +1,16 @@
+---
+description: ML validity, leakage, and anti-fake-score rules
+globs: src/**/*.py,tests/**/*.py,configs/**/*.yaml
+alwaysApply: false
+---
+
+# ML validity
+
+- Metric is macro ROC-AUC over the official 12 sample_submission columns.
+- Undefined per-class AUC (single class) is reported undefined, never 0.5.
+- Gold eval leakage is a hard fail. Folds are grouped by StudyInstanceUID.
+- REFERENCE checkpoints with unknown training overlap are not independent OOF.
+- `kind=synthetic` metrics cannot pass `audit_run(..., production=True)`.
+- LLM confidence is not a calibrated probability.
+- Preprocess hash changes invalidate cache. Train and inference share `data/preprocess.py`.
+- AUC >= 0.86 is not a champion or submit decision by itself.

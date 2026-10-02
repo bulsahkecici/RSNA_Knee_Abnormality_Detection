@@ -1,0 +1,41 @@
+project_name: rsna-knee
+seed: 2026
+profiles:
+  smoke: {max_studies: 8, epochs: 1, synthetic: true}
+  pilot: {max_studies: 50, epochs: 2, synthetic: false}
+  campaign: {max_studies: null, epochs: 8, synthetic: false}
+data:
+  competition_slug: rsna-knee-abnormality-detection
+  local_full_archive: false
+  cache_pilot_studies: 20
+  image_size: 224
+  n_slices_per_slot: 3
+  n_folds: 5
+  seed: 2026
+  dtype: uint8
+  clip_low: 0.5
+  clip_high: 99.5
+labels:
+  ontology_version: 2026-08-06.host-733343.v1
+  pilot_limit: 100
+  gold_eval_fraction: 0.5
+  prompt_dev_uses_gold: false
+  weak_label_loss_weight: 0.25
+  gold_loss_weight: 1.0
+  mask_unmentioned: true
+  mask_uncertain: true
+  mask_sentinel_negative_one: true
+lmstudio:
+  backend: lmstudio
+  base_url: http://127.0.0.1:1234/v1
+  preferred_model_id: qwen/qwen3.8-27b
+  alternate_model_id: qwen/qwen3.5-9b
+  context_tokens: 8192
+  output_tokens: 2048
+  max_in_flight: 1
+  temperature: 0.2
+  thinking: "off"
+  json_mode: json_schema
+  timeout_seconds: 180
+  max_retries: 2
+  auto_downgrade_on_malformed: false

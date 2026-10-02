@@ -1,0 +1,18 @@
+experiment_id: EXP-001-reference
+family: REFERENCE
+hypothesis: Reproduce a public 2.5D baseline under a documented notebook, weights, license, and preprocess hash.
+control: none (reproduction)
+primary_variable: public_reference_pipeline
+architecture: dinov2_small_2p5d
+folds: shared
+seed: 2026
+budget_minutes: 60
+decision_criterion: reproduction_parity_and_source_legitimacy
+may_use_as_independent_oof: false
+requires:
+  - notebook_version
+  - dataset_and_model_sources
+  - license
+  - checkpoint_hash
+  - preprocessing_manifest
+status: defined_not_run

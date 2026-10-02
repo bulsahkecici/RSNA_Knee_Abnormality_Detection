@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsna-knee.local/schemas/report_labels.json",
+  "title": "ReportLabelExtraction",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["StudyInstanceUID", "targets"],
+  "properties": {
+    "StudyInstanceUID": {"type": "string", "minLength": 1},
+    "language_guess": {"type": ["string", "null"]},
+    "targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ACL", "MCL", "Medial Meniscus", "Lateral Meniscus",
+        "Medial OA", "Lateral OA", "PF OA", "Effusion",
+        "Synovitis", "Baker's", "Contusion", "Fracture"
+      ],
+      "properties": {
+        "ACL": {"$ref": "#/$defs/target"},
+        "MCL": {"$ref": "#/$defs/target"},
+        "Medial Meniscus": {"$ref": "#/$defs/target"},
+        "Lateral Meniscus": {"$ref": "#/$defs/target"},
+        "Medial OA": {"$ref": "#/$defs/target"},
+        "Lateral OA": {"$ref": "#/$defs/target"},
+        "PF OA": {"$ref": "#/$defs/target"},
+        "Effusion": {"$ref": "#/$defs/target"},
+        "Synovitis": {"$ref": "#/$defs/target"},
+        "Baker's": {"$ref": "#/$defs/target"},
+        "Contusion": {"$ref": "#/$defs/target"},
+        "Fracture": {"$ref": "#/$defs/target"}
+      }
+    }
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidence_span", "criterion_mapping"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "criterion_positive",
+            "explicit_negative",
+            "uncertain",
+            "not_mentioned",
+            "borderline_negative_hint"
+          ]
+        },
+        "evidence_span": {"type": "string"},
+        "evidence_start": {"type": ["integer", "null"]},
+        "evidence_end": {"type": ["integer", "null"]},
+        "severity": {"type": ["string", "null"]},
+        "size": {"type": ["string", "null"]},
+        "compartment": {"type": ["string", "null"]},
+        "acuity": {"type": ["string", "null"]},
+        "laterality": {"type": ["string", "null"]},
+        "criterion_mapping": {"type": "string"},
+        "llm_confidence": {"type": ["number", "null"]}
+      }
+    }
+  }
+}

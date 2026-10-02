@@ -1,0 +1,31 @@
+labels:
+  ontology_version: 2026-08-06.host-733343.v1
+  ontology_source: https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/discussion/733343
+  source_confirmed: true
+  states:
+    - criterion_positive
+    - explicit_negative
+    - uncertain
+    - not_mentioned
+    - borderline_negative_hint
+  do_not_auto_negative_unmentioned: true
+  do_not_confuse_host_borderline_with_missing_text: true
+  evidence_must_be_report_substring: true
+  resume_key:
+    - StudyInstanceUID
+    - report_hash
+    - model_revision
+    - prompt_hash
+    - ontology_version
+  splits:
+    prompt_dev_or_crossfit_before_extraction_tuning: true
+    gold_eval_never_in_image_training_even_as_weak: true
+    fewshot_and_thresholds_fold_safe: true
+  pilot:
+    n_reports: 100
+    cover_languages_and_rare_targets: true
+    cannot_define_evaluation_gold_boundary: true
+  gold:
+    n_studies_observed_2026-10-02: 58
+    treat_empty_as_missing: true
+    treat_minus_one_as_mask_not_bce_target: true

@@ -1,0 +1,12 @@
+experiment_id: EXP-002-frozen
+family: OWN
+hypothesis: A frozen DINOv2-S/14 encoder with masked pooling and a 12-logit head is a valid own baseline on shared folds.
+control: random-init tiny head on identical cache
+primary_variable: frozen_pretrained_encoder
+architecture: dinov2_small_2p5d
+unfreeze: none
+folds: shared
+seed: 2026
+budget_minutes: 60
+decision_criterion: gold_oof_macro_auc_delta_vs_control_with_audit
+status: defined_not_run

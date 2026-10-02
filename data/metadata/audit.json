@@ -1,0 +1,53 @@
+{
+  "status": "ok",
+  "n_train_studies": 4407,
+  "n_unique_study_uid": 4407,
+  "n_gold_all_targets": 58,
+  "n_missing_report": 0,
+  "n_train_series": 24371,
+  "n_series_studies": 4407,
+  "planes": {
+    "Sagittal": 9864,
+    "Axial": 5898,
+    "Coronal": 8609
+  },
+  "fluid_sensitive": {
+    "1": 14010,
+    "0": 10361
+  },
+  "fat_suppression": {
+    "1": 14010,
+    "0": 10361
+  },
+  "fluid_equals_fatsat_count": 24371,
+  "fluid_equals_fatsat_all": true,
+  "visible_test_studies": 3,
+  "visible_test_is_not_hidden_test": true,
+  "sample_submission_columns": [
+    "StudyInstanceUID",
+    "ACL",
+    "MCL",
+    "Medial Meniscus",
+    "Lateral Meniscus",
+    "Medial OA",
+    "Lateral OA",
+    "PF OA",
+    "Effusion",
+    "Synovitis",
+    "Baker's",
+    "Contusion",
+    "Fracture"
+  ],
+  "target_columns_match_sample": true,
+  "patient_id_present": false,
+  "patient_cv_guaranteed": false,
+  "notes": [
+    "StudyInstanceUID is a study id, not a patient id.",
+    "Do not treat published 4407/58 figures as code constants; this audit is a file measurement.",
+    "Fluid_Sensitive and Fat_Suppression agreed on every training series in this snapshot; still treat them as independent flags."
+  ],
+  "source_hashes": {
+    "train.csv": "8ca2203c0e9d61c080c7a314c7cdb51c1b03a1d9eb4770819f7f34af53ef4e33",
+    "train_series.csv": "573c1d80772bf41211c91b149c95677385a1c22d63f485c347f1b46c0177aef3"
+  }
+}

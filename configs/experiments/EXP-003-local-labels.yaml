@@ -1,0 +1,14 @@
+experiment_id: EXP-003-local-labels
+family: OWN
+hypothesis: Local LM Studio ontology-constrained labels change gold-OOF versus the same architecture trained on a documented baseline label source.
+control: identical architecture, folds, seed, budget; baseline_label_source must be named
+primary_variable: label_source
+architecture: dinov2_small_2p5d
+unfreeze: none
+folds: shared
+seed: 2026
+budget_minutes: 60
+baseline_label_source: required_at_run
+treatment_label_source: local_lmstudio_ontology_v1
+decision_criterion: gold_oof_macro_auc_and_per_class_plus_leakage_audit
+status: defined_not_run

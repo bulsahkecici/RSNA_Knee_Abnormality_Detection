@@ -1,0 +1,89 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rsna-knee"
+version = "0.1.0"
+description = "Durable RSNA Knee Abnormality Detection pipeline: labels, cache, train, audit, offline submit."
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [{name = "RSNA Knee local pipeline"}]
+dependencies = [
+  "typer>=0.12",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "pyyaml>=6.0",
+  "python-dotenv>=1.0",
+  "httpx>=0.27",
+  "jsonschema>=4.22",
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "pyarrow>=16",
+  "scikit-learn>=1.5",
+  "filelock>=3.15",
+  "rich>=13.7",
+  "psutil>=6.0",
+  "packaging>=24.0",
+]
+
+[project.optional-dependencies]
+dicom = [
+  "pydicom>=2.4",
+  "pillow>=10.3",
+]
+training = [
+  "torch>=2.4",
+]
+langgraph = [
+  "langgraph>=0.2",
+  "langgraph-checkpoint-sqlite>=2.0",
+]
+kaggle = [
+  "kaggle>=1.7",
+]
+dev = [
+  "pytest>=8.2",
+  "ruff>=0.5",
+  "mypy>=1.10",
+]
+local = [
+  "rsna-knee[dicom,training,langgraph,kaggle,dev]",
+]
+
+[project.scripts]
+rsna = "rsna_knee.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+rsna_knee = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+  "slow: longer integration tests",
+  "live: requires LM Studio or Kaggle credentials",
+]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "B008"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+pretty = true
+show_error_codes = true
+packages = ["rsna_knee"]

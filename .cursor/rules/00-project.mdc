@@ -1,0 +1,14 @@
+---
+description: Project-wide RSNA Knee pipeline rules for every session
+alwaysApply: true
+---
+
+# RSNA Knee project
+
+- Runtime is the `rsna` CLI, not Cursor chat. Do not imply VS Code will auto-run agents when the folder opens.
+- Do not invent competition metrics, SUBMITTED states, or GPU allocations.
+- Do not load raw reports into cloud prompts; call local extraction.
+- Do not download the full DICOM archive to macOS unified memory.
+- Colab automatic GPU request is unsupported unless a documented API is wired. Use handoff.
+- Max two subagents; honor `.cursor/agents` write ownership.
+- Python package lives in `src/rsna_knee`. Keep notebooks thin.
