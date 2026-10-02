@@ -170,6 +170,109 @@ def _synthetic_reports() -> list[dict[str, str]]:
     ]
 
 
+def resolve_train_config(profile: str, experiment: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Profile and experiment YAML supply epochs, batch, and seed. Callers do not hardcode them."""
+    cfg = load_config()
+    profiles = (cfg.raw or {}).get("profiles") or {}
+    chosen = profiles.get(profile) or {}
+    data = (cfg.raw or {}).get("data") or {}
+    settings: dict[str, Any] = {
+        "epochs": int(chosen.get("epochs") or 1),
+        "effective_batch": int(cfg.runtime.training.effective_study_batch),
+        "microbatch": 1,
+        "seed": int(data.get("seed") or (cfg.raw or {}).get("seed") or 0),
+        "profile": profile,
+        "img_size": int(data.get("image_size") or 224),
+    }
+    for key in ("epochs", "effective_batch", "microbatch", "seed", "unfreeze_after_steps", "img_size"):
+        if experiment and key in (experiment.get("train") or {}) and experiment["train"][key] is not None:
+            settings[key] = experiment["train"][key]
+    return settings
+
+
+def _reusable_labels(state: PipelineState) -> Path | None:
+    roots = _roots(state)
+    candidates = []
+    current = state.artifacts.get("labels")
+    if current:
+        candidates.append(Path(current))
+    candidates.append(roots.labels / f"{state.run_id}-training.jsonl")
+    for path in candidates:
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    return None
+
+
+def _ensure_train_job(state: PipelineState, exp_path: str | None = None) -> dict[str, Any]:
+    """Write the hashed job before a runtime handoff so the worker has a bundle to load."""
+    from rsna_knee.paths import CONFIG_DIR
+
+    roots = _roots(state)
+    ckpt = roots.runs / state.run_id
+    ckpt.mkdir(parents=True, exist_ok=True)
+    experiment = None
+    if exp_path:
+        from rsna_knee.config import load_experiment
+
+        experiment = load_experiment(exp_path)
+    elif state.artifacts.get("experiment"):
+        from rsna_knee.config import load_experiment
+
+        exp_file = Path(state.artifacts["experiment"])
+        if exp_file.is_file():
+            experiment = load_experiment(exp_file)
+    resources: dict[str, str] = {}
+    config_path = CONFIG_DIR / "default.yaml"
+    if config_path.is_file():
+        resources["config"] = str(config_path)
+    for key, artifact in (("folds", "folds"), ("labels", "labels"), ("cache", "cache_manifest"), ("weights", "weights")):
+        path = state.artifacts.get(artifact)
+        if path and Path(path).is_file():
+            resources[key] = path
+    weights = state.artifacts.get("weights") or os.environ.get("RSNA_DINOV2_WEIGHTS")
+    if not weights:
+        default_weights = CONFIG_DIR.parent / "artifacts" / "weights" / "dinov2_vits14_pretrain.pth"
+        if default_weights.is_file():
+            weights = str(default_weights)
+    if weights and Path(weights).is_file():
+        resources["weights"] = str(weights)
+        state.artifacts["weights"] = str(weights)
+    train_csv = state.artifacts.get("train_csv")
+    if train_csv and Path(train_csv).is_file():
+        resources["train_csv"] = str(train_csv)
+    elif (METADATA_DIR / "train.csv").is_file():
+        try:
+            sha256_file(METADATA_DIR / "train.csv")
+        except OSError:
+            pass
+        else:
+            resources["train_csv"] = str(METADATA_DIR / "train.csv")
+    train = resolve_train_config(state.profile, experiment)
+    job = build_job(
+        run_id=state.run_id,
+        stage="TRAINING",
+        inputs={
+            "config": state.hashes.get("config", ""),
+            "folds": state.hashes.get("folds", ""),
+            "labels": state.hashes.get("labels", ""),
+            "cache": state.hashes.get("cache", ""),
+        },
+        dest=ckpt / "job",
+        synthetic=False,
+        fencing_token=state.fencing_token,
+        resources=resources,
+        input_root=config_path.parent.parent if config_path.is_file() else None,
+        checkpoint_out="checkpoint.pt",
+        train=train,
+    )
+    job_path = ckpt / "job" / "job.json"
+    state.artifacts["job"] = str(job_path)
+    if exp_path:
+        state.artifacts["experiment"] = exp_path
+    state.hashes["job"] = job["spec_sha256"]
+    return job
+
+
 def stage_labels(
     state: PipelineState,
     registry: Registry,
@@ -222,6 +325,13 @@ def stage_labels(
             rows.append({"uid": row["StudyInstanceUID"], "payload": payload, "status": "ok", "kind": "synthetic_fixture"})
         state.stage = Stage.LABELS_READY
     elif not live:
+        existing = _reusable_labels(state)
+        if existing is not None:
+            state.artifacts["labels"] = str(existing)
+            state.hashes["labels"] = sha256_file(existing)
+            state.stage = Stage.LABELS_READY
+            state.next_action_tr = "Aynı run_id etiket dosyası yeniden kullanıldı. Ham raporlar yeniden gönderilmedi."
+            return state
         state.stage = Stage.NEEDS_RUNTIME
         state.blocked_reason = "labels_require_live_lmstudio"
         state.next_action_tr = "rsna labels pilot --live yerel LM Studio ile çalışır. Fixture gerçek etiket dizinine yazılmaz."
@@ -282,8 +392,15 @@ def stage_labels(
     with dest.open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-    state.artifacts["labels"] = str(dest)
-    state.hashes["labels"] = sha256_file(dest)
+    from rsna_knee.labels.canonical import publish_training_labels
+
+    train_csv = None if state.synthetic else METADATA_DIR / "train.csv"
+    if train_csv is not None and not train_csv.is_file():
+        train_csv = None
+    canonical = publish_training_labels(rows, roots.labels / f"{state.run_id}-training.jsonl", train_csv=train_csv)
+    state.artifacts["labels_raw"] = str(dest)
+    state.artifacts["labels"] = canonical["path"]
+    state.hashes["labels"] = sha256_file(Path(canonical["path"]))
     state.next_action_tr = "Cache pilotunu çalıştırın. Ham raporları cloud agent'a yapıştırmayın."
     return state
 
@@ -334,6 +451,8 @@ def stage_cache(state: PipelineState, registry: Registry, limit: int = 20) -> Pi
 
 
 def stage_runtime(state: PipelineState, registry: Registry, gpu_order: list[str] | None = None) -> PipelineState:
+    if not state.synthetic:
+        _ensure_train_job(state)
     if state.synthetic:
         state.stage = Stage.WAITING_RUNTIME
         state.lease_id = new_lease_id()
@@ -412,56 +531,42 @@ def stage_train(state: PipelineState, registry: Registry, exp_path: str | None =
         return state
     if _reject_fixtures(state, [], "dinov2_vits14"):
         return state
-    from rsna_knee.paths import CONFIG_DIR
+    from rsna_knee.runtime.budget import execution_allowed
     from rsna_knee.runtime.transport import FileTransport
     from rsna_knee.runtime.worker import run_job
 
-    resources: dict[str, str] = {}
-    config_path = CONFIG_DIR / "default.yaml"
-    if config_path.is_file():
-        resources["config"] = str(config_path)
-    for key, artifact in (("folds", "folds"), ("labels", "labels"), ("cache", "cache_manifest")):
-        path = state.artifacts.get(artifact)
-        if path and Path(path).is_file():
-            resources[key] = path
-    weights = state.artifacts.get("weights") or os.environ.get("RSNA_DINOV2_WEIGHTS")
-    if not weights:
-        default_weights = CONFIG_DIR.parent / "artifacts" / "weights" / "dinov2_vits14_pretrain.pth"
-        if default_weights.is_file():
-            weights = str(default_weights)
-    if weights and Path(weights).is_file():
-        resources["weights"] = str(weights)
-        state.artifacts["weights"] = str(weights)
-    checkpoint_out = ckpt / "checkpoint.pt"
-    job = build_job(
-        run_id=state.run_id,
-        stage="TRAINING",
-        inputs={
-            "config": state.hashes.get("config", ""),
-            "folds": state.hashes.get("folds", ""),
-            "labels": state.hashes.get("labels", ""),
-            "cache": state.hashes.get("cache", ""),
-        },
-        dest=ckpt / "job",
-        synthetic=False,
-        fencing_token=state.fencing_token,
-        resources=resources,
-        input_root=config_path.parent.parent if config_path.is_file() else None,
-        checkpoint_out=str(checkpoint_out),
-        train={"epochs": 1, "effective_batch": 1, "microbatch": 1, "seed": 0},
-    )
-    job_path = ckpt / "job" / "job.json"
-    job_path.write_text(json.dumps(job, indent=2), encoding="utf-8")
-    state.artifacts["job"] = str(job_path)
-    state.artifacts["experiment"] = exp_path or ""
-    state.hashes["train"] = job["bundle_sha256"]
-    if not {"folds", "labels", "cache", "weights"} <= set(resources):
+    job = _ensure_train_job(state, exp_path=exp_path)
+    resources = set(job.get("resources") or {})
+    if not {"folds", "labels", "cache", "weights"} <= resources:
         state.stage = Stage.NEEDS_RUNTIME
         state.blocked_reason = "training_inputs_missing"
         state.next_action_tr = (
             "Job bundle yazıldı. Folds, labels, cache ve allowlist'teki DINOv2 ağırlığı gerekir. "
             "Colab eklentisi bağlandıktan sonra rsna worker --job-bundle bu dosyayı yükler."
         )
+        return state
+    import torch
+
+    train_cfg = job.get("train") or {}
+    n_studies = 0
+    img_size = int(train_cfg.get("img_size") or 224)
+    cache_path = state.artifacts.get("cache_manifest")
+    if cache_path and Path(cache_path).is_file():
+        manifest = json.loads(Path(cache_path).read_text(encoding="utf-8"))
+        n_studies = int(manifest.get("n_studies") or len(manifest.get("studies") or {}))
+        shapes = [list((meta or {}).get("shape") or []) for meta in (manifest.get("studies") or {}).values()]
+        if shapes and shapes[0]:
+            img_size = int(shapes[0][-1])
+    allowed, reason = execution_allowed(
+        profile=str(train_cfg.get("profile") or state.profile),
+        n_studies=n_studies,
+        img_size=img_size,
+        cuda=bool(torch.cuda.is_available()),
+    )
+    if not allowed:
+        state.stage = Stage.NEEDS_RUNTIME
+        state.blocked_reason = reason
+        state.next_action_tr = "Bu profil yerel CPU'da çalıştırılmadı. Job bundle duruyor; GPU worker aynı run_id ile devam eder."
         return state
     record = run_job(job, FileTransport(ckpt / "transport"), expected_token=job["fencing_token"])
     state.artifacts["worker_result"] = str(ckpt / "transport" / "inbox")
@@ -498,7 +603,9 @@ def stage_evaluate(state: PipelineState, registry: Registry) -> PipelineState:
             state.blocked_reason = "held_out_inputs_missing"
             state.next_action_tr = "Held-out için job bundle içindeki folds, labels ve cache gerekir."
             return state
-        job = json.loads(Path(job_path).read_text(encoding="utf-8"))
+        from rsna_knee.runtime.worker import load_job_bundle
+
+        job = load_job_bundle(Path(job_path))
         payload, reason = prepare_training(job, Path(job_path).parent)
         if payload is None:
             state.stage = Stage.BLOCKED
@@ -573,6 +680,9 @@ def stage_audit(state: PipelineState, registry: Registry) -> PipelineState:
         "offline": "BLOCKED",
         "identity_errors": ["synthetic_namespace"] if state.synthetic else ["not_live_verified"],
         "checkpoint_sha256": state.hashes.get("train"),
+        "package_sha256": state.hashes.get("package"),
+        "kernel": state.artifacts.get("kernel"),
+        "version": state.artifacts.get("kernel_version"),
     }
     result = audit_run(payload, production=True)
     path = roots.runs / state.run_id / "audit.json"
@@ -589,8 +699,6 @@ def stage_audit(state: PipelineState, registry: Registry) -> PipelineState:
 
 def stage_package(state: PipelineState, registry: Registry) -> PipelineState:
     roots = _roots(state)
-    audit_path = state.artifacts.get("audit")
-    audit = json.loads(Path(audit_path).read_text(encoding="utf-8")) if audit_path and Path(audit_path).is_file() else {"overall": "BLOCKED"}
     ckpt_path = Path(state.artifacts["checkpoint"]) if state.artifacts.get("checkpoint") else None
     pkg = package_run(
         state.run_id,
@@ -622,18 +730,50 @@ def stage_package(state: PipelineState, registry: Registry) -> PipelineState:
             copied_hash = sha256_file(copied_file)
             state.hashes["checkpoint"] = copied_hash
     identity_errors = list(pkg.get("identity_errors") or [])
-    audit_bound = (
-        audit.get("overall") == "PASS"
-        and audit.get("run_id") == state.run_id
-        and audit.get("checkpoint_sha256")
-        and audit.get("package_sha256") == pkg["sha256"]
-        and copied_hash is not None
-        and audit.get("checkpoint_sha256") == state.hashes.get("train")
-    )
-    state.stage = Stage.READY_TO_SUBMIT if audit_bound and not identity_errors else Stage.BLOCKED
-    if state.stage == Stage.BLOCKED:
+    if state.synthetic and "synthetic_namespace" not in identity_errors:
+        identity_errors.append("synthetic_namespace")
+    elif not identity_errors:
+        identity_errors.append("not_live_verified")
+    kernel = None
+    kernel_meta = Path(pkg["dir"]) / "kernel-metadata.json"
+    if kernel_meta.is_file():
+        kernel = json.loads(kernel_meta.read_text(encoding="utf-8")).get("id")
+    metrics: dict[str, Any] = {}
+    metrics_path = state.artifacts.get("metrics")
+    if metrics_path and Path(metrics_path).is_file():
+        metrics = json.loads(Path(metrics_path).read_text(encoding="utf-8"))
+    payload = {
+        "synthetic": state.synthetic,
+        "run_id": state.run_id,
+        "hashes": state.hashes,
+        "metrics": metrics,
+        "ontology_confirmed": True if state.synthetic else None,
+        "leakage": "BLOCKED",
+        "cache_parity": "BLOCKED",
+        "resources": "BLOCKED",
+        "external_data": "BLOCKED",
+        "offline": "BLOCKED",
+        "identity_errors": identity_errors,
+        "checkpoint_sha256": state.hashes.get("train") or copied_hash,
+        "package_sha256": pkg["sha256"],
+        "kernel": kernel,
+        "version": state.artifacts.get("kernel_version"),
+    }
+    result = audit_run(payload, production=True)
+    audit_file = roots.runs / state.run_id / "audit.json"
+    audit_file.parent.mkdir(parents=True, exist_ok=True)
+    audit_file.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    state.artifacts["audit"] = str(audit_file)
+    state.artifacts["kernel"] = kernel
+    state.hashes["audit"] = sha256_file(audit_file)
+    approved = result.get("overall") == "PASS" and not identity_errors and copied_hash is not None
+    if approved:
+        (Path(pkg["dir"]) / "FROZEN").write_text(pkg["sha256"], encoding="utf-8")
+        state.stage = Stage.READY_TO_SUBMIT
+    else:
+        state.stage = Stage.BLOCKED
         state.blocked_reason = identity_errors[0] if identity_errors else "audit_blocks_submit"
-    state.next_action_tr = "CSV biçimi submit açmaz. Audit PASS ve kimlik doğrulaması gerekir."
+    state.next_action_tr = "Aday paket doğrulandı ve audit yazıldı. Onaydan sonra paket yeniden üretilmez."
     return state
 
 

@@ -8,12 +8,15 @@ import platform
 from pathlib import Path
 from typing import Any
 
+import torch
+
 from rsna_knee.gates import assert_real_encoder
 from rsna_knee.hashing import sha256_file, sha256_json
 from rsna_knee.models.dinov2 import load_dinov2_vits14
 from rsna_knee.models.study import StudyModel
 from rsna_knee.models.weights import weight_trust
-from rsna_knee.runtime.jobs import validate_job
+from rsna_knee.runtime.budget import execution_allowed
+from rsna_knee.runtime.jobs import resolve_checkpoint_out, validate_job
 from rsna_knee.runtime.train_payload import heldout_batches, prepare_training
 from rsna_knee.runtime.transport import FileTransport
 from rsna_knee.training.loop import train_study_model
@@ -82,12 +85,27 @@ def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str,
             },
             [],
         )
+    train_cfg = dict(job.get("train") or {})
+    allowed, budget_reason = execution_allowed(
+        profile=str(train_cfg.get("profile") or "pilot"),
+        n_studies=len(payload["train_uids"]),
+        img_size=int(payload["img_size"]),
+        cuda=bool(torch.cuda.is_available()),
+        slots=int(payload.get("slots") or 3),
+        centers=int(payload.get("centers") or 3),
+    )
+    if not allowed:
+        return budget_reason, {"kind": "unavailable", "macro_auc": None, "notes": budget_reason}, []
+    supervised = 0.0
+    for batch in payload["batches"]:
+        supervised += float(batch["y_mask"].sum())
+    if supervised <= 0:
+        return "no_supervision", {"kind": "unavailable", "macro_auc": None, "notes": "mask and weight sum is zero", "supervised_targets": 0}, []
     encoder = load_dinov2_vits14(payload["weights"], img_size=payload["img_size"])
     if encoder.provenance.get("pretrained") and not trust["official"]:
         return "unverified_weights", {"kind": "unavailable", "macro_auc": None, "notes": "pretrained flag without official hash"}, []
-    out_path = Path(job["checkpoint_out"]) if job.get("checkpoint_out") else job_dir / "checkpoint.pt"
+    out_path = resolve_checkpoint_out(job, job_dir)
     before = sha256_file(out_path) if out_path.is_file() else None
-    train_cfg = job.get("train") or {}
     model = StudyModel(encoder, freeze_encoder=True)
     trained = train_study_model(
         model,
@@ -97,13 +115,16 @@ def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str,
         microbatch=int(train_cfg.get("microbatch", 1)),
         seed=int(train_cfg.get("seed", 0)),
         unfreeze_after_steps=train_cfg.get("unfreeze_after_steps"),
+        interrupt_after_steps=train_cfg.get("interrupt_after_steps"),
         ckpt_path=out_path,
+        resume=bool(train_cfg.get("resume")) and out_path.is_file(),
         input_id=payload["input_id"],
         config_id=payload["config_id"],
     )
     after = sha256_file(out_path) if out_path.is_file() else None
-    if trained["step"] < 1 or after is None or after == before:
-        return "no_checkpoint", {"kind": "unavailable", "macro_auc": None, "notes": "training did not write a new checkpoint"}, []
+    if float(trained.get("supervised_weight") or 0) <= 0 or trained["step"] < 1 or after is None or (after == before and not train_cfg.get("resume")):
+        reason = "no_supervision" if float(trained.get("supervised_weight") or 0) <= 0 else "no_checkpoint"
+        return reason, {"kind": "unavailable", "macro_auc": None, "notes": reason, "supervised_weight": trained.get("supervised_weight")}, []
     from rsna_knee.evaluation.heldout import evaluate_checkpoint
 
     metrics_path = job_dir / "metrics.json"
@@ -117,6 +138,9 @@ def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str,
         scope=payload["scope"],
     )
     eval_metrics["steps"] = trained["step"]
+    eval_metrics["supervised_weight"] = trained.get("supervised_weight")
+    eval_metrics["phase"] = train_cfg.get("phase")
+    eval_metrics["resumed"] = bool(train_cfg.get("resume"))
     eval_metrics["weights_official"] = bool(trust["official"])
     eval_metrics["weights_reason"] = trust["reason"]
     eval_metrics["train_uids"] = payload["train_uids"]
@@ -200,6 +224,11 @@ def run_job(
 
 
 def load_job_bundle(path: Path) -> dict[str, Any]:
+    from rsna_knee.runtime.jobs import resolve_bundle_path
+
     data = json.loads(Path(path).read_text(encoding="utf-8"))
+    resolved = resolve_bundle_path(data, Path(path))
+    if resolved is not None and resolved.is_file():
+        data["bundle_path"] = str(resolved)
     data["_bundle_sha256"] = sha256_file(Path(path))
     return data

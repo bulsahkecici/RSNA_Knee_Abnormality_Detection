@@ -61,8 +61,15 @@ def planned_updates(n_studies: int, epochs: int, effective_batch: int) -> int:
     return max(1, epochs * max(1, per_epoch))
 
 
-def _study_count(batches: list[dict[str, torch.Tensor]]) -> int:
-    return sum(int(batch["images"].shape[0]) for batch in batches)
+def _study_count(batches: list[Any]) -> int:
+    total = 0
+    for batch in batches:
+        known = getattr(batch, "n_studies", None)
+        if known is not None:
+            total += int(known)
+        else:
+            total += int(batch["images"].shape[0])
+    return total
 
 
 def _slice_batch(batch: dict[str, torch.Tensor], start: int, end: int) -> dict[str, torch.Tensor]:
@@ -171,6 +178,7 @@ def train_study_model(
     interrupted = False
     oob_fired = False
     weight_acc = 0.0
+    supervised_weight = 0.0
     opt.zero_grad(set_to_none=True)
     group_cursor = cursor
     group_offset = batch_offset
@@ -215,10 +223,17 @@ def train_study_model(
             torch.cuda.empty_cache()
 
     def flush() -> None:
-        nonlocal step, samples_in_group, weight_acc, unfrozen, interrupted
+        nonlocal step, samples_in_group, weight_acc, supervised_weight, unfrozen, interrupted
         if samples_in_group <= 0:
             return
-        denom = max(weight_acc, 1e-8)
+        if weight_acc <= 0:
+            opt.zero_grad(set_to_none=True)
+            samples_in_group = 0
+            weight_acc = 0.0
+            mark_group()
+            return
+        supervised_weight += weight_acc
+        denom = weight_acc
         if scaler is not None:
             scaler.unscale_(opt)
         for group in opt.param_groups:
@@ -255,7 +270,11 @@ def train_study_model(
             batch = batches[order[cursor]]
             n = int(batch["images"].shape[0])
             while batch_offset < n and not interrupted:
-                take = min(max(1, microbatch), n - batch_offset)
+                room = effective_batch - samples_in_group
+                if room <= 0:
+                    flush()
+                    continue
+                take = min(max(1, microbatch), n - batch_offset, room)
                 try:
                     if oob_once and not oob_fired and take > 1:
                         oob_fired = True
@@ -316,6 +335,7 @@ def train_study_model(
         "amp": _amp_enabled(dev),
         "unfrozen": unfrozen,
         "updates_planned": total_steps,
+        "supervised_weight": supervised_weight,
     }
 
 

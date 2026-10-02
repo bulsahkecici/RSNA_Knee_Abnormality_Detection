@@ -139,7 +139,7 @@ _INPUT_KEYS = {
     "labels": ("metadata", "folds"),
     "cache": ("folds",),
     "runtime": ("config",),
-    "train": ("cache", "folds", "labels"),
+    "train": ("cache", "folds", "labels", "config"),
     "evaluate": ("train",),
     "audit": ("train",),
     "package": ("audit",),
@@ -203,6 +203,28 @@ def release_consumed_pause(state: PipelineState) -> None:
         state.pause_requested = False
 
 
+def _output_hashes(state: PipelineState) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for key, raw in state.artifacts.items():
+        if not isinstance(raw, str):
+            continue
+        path = Path(raw)
+        if path.is_file():
+            hashes[key] = sha256_file(path)
+    return hashes
+
+
+def _outputs_current(record: dict[str, Any], state: PipelineState) -> bool:
+    for key, digest in (record.get("outputs") or {}).items():
+        raw = state.artifacts.get(key)
+        if not isinstance(raw, str):
+            return False
+        path = Path(raw)
+        if not path.is_file() or sha256_file(path) != digest:
+            return False
+    return True
+
+
 def invalidate_from(state: PipelineState, name: str, names: list[str]) -> None:
     if name not in names:
         return
@@ -236,7 +258,12 @@ def sequential_run(
                 return state
             incoming = input_hash_for(name, state)
             record = state.stage_records.get(name) or {}
-            if state.resume and record.get("status") == "complete" and record.get("input_hash") == incoming:
+            if (
+                state.resume
+                and record.get("status") == "complete"
+                and record.get("input_hash") == incoming
+                and _outputs_current(record, state)
+            ):
                 continue
             if record and record.get("input_hash") not in {None, incoming}:
                 invalidate_from(state, name, names)
@@ -244,7 +271,7 @@ def sequential_run(
             registry.upsert_run(state.run_id, state.profile, state.stage, state.model_dump(), state.synthetic)
             if state.stage in STOP_STAGES:
                 return state
-            state.stage_records[name] = {"status": "complete", "input_hash": incoming}
+            state.stage_records[name] = {"status": "complete", "input_hash": incoming, "outputs": _output_hashes(state)}
             registry.upsert_run(state.run_id, state.profile, state.stage, state.model_dump(), state.synthetic)
         return state
     finally:

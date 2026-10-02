@@ -1,6 +1,8 @@
 # Implementation status
 
-Date: 2026-10-03. Review `RSNA_Repo_Tekrar_Inceleme_833da87.md` was checked against commit `833da87`. This pass wires the worker to real files, the trainer, and held-out reload. It is not a live GPU campaign and not a Kaggle submission.
+Date: 2026-10-03. Review `RSNA_Repo_Inceleme_3e8c69c.md` was checked against commit `3e8c69c`. This pass connects one `run_id` from extractor labels through a relocated worker, resume, evaluate, and a verified candidate package. It is not a live GPU campaign and not a Kaggle submission.
+
+Live LM Studio, official DINOv2 weights, CUDA, real MRI, and Kaggle were not checked in this pass. Example tests use fixture allowlist weights; `weights_official` stays false.
 
 `state/folds.csv` had been overwritten by an older test (`StudyInstanceUID,fold` / `REAL,0`). It was rebuilt from `data/metadata/train.csv`: 4407 studies, 58 gold, 29 gold-eval. Fixture label files `real-labels.jsonl` and `syn-*-labels.jsonl` were removed from `data/labels`. Tests now redirect real roots with `RSNA_ROOTS`.
 

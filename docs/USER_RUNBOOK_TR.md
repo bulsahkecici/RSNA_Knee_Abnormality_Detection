@@ -17,9 +17,9 @@ rsna doctor
 4. Colab: `rsna runtime acquire --gpu-order A100,L4,T4 --wait-seconds 300` çıktısındaki **handoff** dosyasını izleyin. Eklentiyle kernel seçin. Bu adım otomatik GPU tahsisi değildir. Allocation API yokken 300 saniye beklenmez.
 5. `rsna pipeline run --profile pilot` — eksik cache, CUDA veya audit varsa `NEEDS_RUNTIME` / `BLOCKED` durur. TinyEncoder çalıştırmaz.
 
-Örnek veri testleri (`tests/test_review_833da87.py`) gerçek MRI pilotu değildir. Onlar 28px tensör ve geçici allowlist kullanır.
+Örnek veri testleri (`tests/test_review_3e8c69c.py`) gerçek MRI pilotu değildir. Onlar 28px tensör ve geçici allowlist kullanır; `weights_official` false kalır.
 
-Küçük gerçek pilot, tam arşiv indirmeden:
+Küçük gerçek pilot, tam arşiv indirmeden. Aynı `RUN` bütün adımlarda kullanılır. `pipeline run` Colab handoff'tan önce `job.json` yazar. Uzak makinede Mac mutlak yolu değil `RSNA_INPUT_ROOT` geçerlidir. Bu komutlar submission başlatmaz.
 
 ```bash
 # Resmi ağırlık bir kez indirilir; SHA uydurulmaz.
@@ -29,16 +29,22 @@ mkdir -p artifacts/weights
 shasum -a 256 artifacts/weights/dinov2_vits14_pretrain.pth
 # configs/dinov2_vits14_allowlist.json -> {"sha256": ["<çıkan hash>"]}
 
+export RUN=pilot-$(date +%Y%m%d)
+rsna doctor
 rsna folds create
-rsna labels pilot --limit 5 --live
+rsna labels pilot --limit 20 --live --run-id "$RUN"
 rsna cache build \
   --series-csv data/metadata/train_series.csv \
   --dicom-root /path/to/a-few-studies \
   --dest data/cache \
   --limit 20
-rsna pipeline run --profile pilot
-rsna worker --job-bundle artifacts/runs/<run-id>/job/job.json
-rsna evaluate --run-id <run-id>
+rsna pipeline run --profile pilot --run-id "$RUN"
+# Handoff BLOCKED/NEEDS_RUNTIME ise job hazırdır. GPU makinesinde:
+# export RSNA_INPUT_ROOT=/path/to/copied/bundle
+rsna worker --job-bundle artifacts/runs/$RUN/job/job.json
+rsna evaluate --run-id "$RUN"
+rsna package --run-id "$RUN"
+rsna audit --run-id "$RUN"
 ```
 
 `--dicom-root` yoksa cache komutu kernel klasörünü hazırlar ve `kaggle kernels push` çağırmaz. `kernels push` yerel `src` ve checkpoint'i runtime'a taşımaz; paket `asset/` altında dataset metadata yazar, `executed` false kalır. Allowlist'te olmayan ağırlıkla worker `unverified_weights` döner. Colab'da otomatik GPU API yoktur; eklentiyle kernel bağlandıktan sonra aynı `rsna worker --job-bundle` çalışır. `RSNA_INPUT_ROOT` uzak makinede bundle kökünü gösterir.

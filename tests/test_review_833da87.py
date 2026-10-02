@@ -281,9 +281,12 @@ def test_worker_rejects_dummy_checkpoint_and_tiny_encoder(tmp_path, monkeypatch)
     rec = run_job(job, FileTransport(tmp_path / "tr"), items=[{"uid": "nope"}], expected_token=job["fencing_token"])
     assert rec.exit_reason == "rejected"
     assert rec.metrics.kind == "unavailable"
+    from rsna_knee.runtime.jobs import refresh_spec
+
     tiny = dict(job)
     tiny["encoder"] = "tiny_test_encoder"
     tiny["synthetic"] = False
+    refresh_spec(tiny)
     rec_tiny = run_job(tiny, FileTransport(tmp_path / "tr2"), expected_token=tiny["fencing_token"])
     assert rec_tiny.exit_reason == "rejected_encoder"
 
@@ -302,8 +305,11 @@ def test_worker_trains_from_files_and_writes_heldout(tmp_path, monkeypatch):
         checkpoint_out=str(dest / "checkpoint.pt"),
         train={"epochs": 1, "effective_batch": 1, "microbatch": 1, "seed": 0},
     )
+    from rsna_knee.runtime.jobs import refresh_spec
+
     leaked = dict(job)
     leaked["train_uids"] = ["1.2.10", "1.2.13"]
+    refresh_spec(leaked)
     leaked_rec = run_job(leaked, FileTransport(tmp_path / "leak"), expected_token=job["fencing_token"])
     assert leaked_rec.exit_reason == "leakage"
     rec = run_job(job, FileTransport(tmp_path / "ok"), expected_token=job["fencing_token"])

@@ -15,6 +15,19 @@ from rsna_knee.submission.package import _checkpoint_errors
 from rsna_knee.workflow.registry import Registry
 
 _RECEIPT_RE = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)
+
+
+def _matching_receipt(found: Any, kernel: str, version: str) -> str | None:
+    rows = found if isinstance(found, list) else []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        if item.get("kernel") != kernel or str(item.get("version")) != str(version):
+            continue
+        receipt = str(item.get("ref") or item.get("server_receipt") or "")
+        if _RECEIPT_RE.fullmatch(receipt):
+            return receipt
+    return None
 SLUG = "rsna-knee-abnormality-detection"
 
 
@@ -122,10 +135,10 @@ def submit_run(
         if history is None:
             return _blocked(local_attempt_id, "reconciliation_unavailable", command=command)
         found = history()
-        receipt = _RECEIPT_RE.search(json.dumps(found)) if found else None
+        receipt = _matching_receipt(found, kernel, version)
         if receipt is None:
             return _blocked(local_attempt_id, "unresolved_attempt", command=command)
-        return _blocked(local_attempt_id, "reconciled_without_resubmit", server_receipt=receipt.group(1), command=command)
+        return _blocked(local_attempt_id, "reconciled_without_resubmit", server_receipt=receipt, command=command)
     provider = provider or KaggleProvider()
     if not execute:
         return {

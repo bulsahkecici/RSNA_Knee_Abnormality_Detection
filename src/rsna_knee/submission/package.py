@@ -67,6 +67,34 @@ def _hash_tree(root: Path) -> dict[str, str]:
     return files
 
 
+def offline_dependency_manifest() -> dict[str, Any]:
+    import importlib.metadata as metadata
+
+    packages = []
+    for name in ("numpy", "torch", "pydicom", "pydantic"):
+        try:
+            version = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            version = None
+        packages.append({"name": name, "version": version})
+    return {
+        "packages": packages,
+        "install_argv": [
+            "python",
+            "-m",
+            "pip",
+            "install",
+            "--no-index",
+            "--find-links",
+            "asset/wheels",
+            "-r",
+            "asset/requirements.txt",
+        ],
+        "wheels_vendored": False,
+        "note": "Pinned names are recorded. Missing or unhashed wheels stay blocked; this machine is not a clean offline venv proof.",
+    }
+
+
 def package_run(
     run_id: str,
     extra_files: list[Path] | None = None,
@@ -78,6 +106,18 @@ def package_run(
     ensure_runtime_dirs()
     dest_root = dest_root or SUBMISSIONS_DIR
     dest_dir = dest_root / run_id
+    frozen = dest_dir / "FROZEN"
+    tar_path = dest_root / f"{run_id}.tar.gz"
+    if frozen.is_file() and tar_path.is_file() and (dest_dir / "MANIFEST.json").is_file():
+        manifest = json.loads((dest_dir / "MANIFEST.json").read_text(encoding="utf-8"))
+        return {
+            "dir": str(dest_dir),
+            "tar": str(tar_path),
+            "sha256": sha256_file(tar_path),
+            "manifest": manifest,
+            "identity_errors": verify_package(dest_dir),
+            "frozen": True,
+        }
     if dest_dir.exists():
         shutil.rmtree(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -110,6 +150,12 @@ def package_run(
     }
     (asset_dir / "dataset-metadata.json").write_text(json.dumps(dataset_meta, indent=2), encoding="utf-8")
     (asset_dir / "bootstrap.py").write_text(_BOOTSTRAP, encoding="utf-8")
+    deps = offline_dependency_manifest()
+    (asset_dir / "offline-deps.json").write_text(json.dumps(deps, indent=2), encoding="utf-8")
+    (asset_dir / "requirements.txt").write_text(
+        "\n".join(f"{item['name']}=={item['version']}" for item in deps["packages"] if item.get("version")) + "\n",
+        encoding="utf-8",
+    )
     (dest_dir / "kaggle-asset.json").write_text(
         json.dumps(
             {
@@ -215,12 +261,22 @@ def verify_package(dest_dir: Path) -> list[str]:
             errors.append(f"missing_file:{rel}")
         elif sha256_file(path) != digest:
             errors.append(f"hash_mismatch:{rel}")
+    if not (dest_dir / "asset" / "offline-deps.json").is_file():
+        errors.append("offline_manifest_missing")
+    else:
+        deps = json.loads((dest_dir / "asset" / "offline-deps.json").read_text(encoding="utf-8"))
+        if not deps.get("install_argv") or "--no-index" not in deps.get("install_argv", []):
+            errors.append("offline_install_missing")
+        if not (dest_dir / "asset" / "requirements.txt").is_file():
+            errors.append("offline_requirements_missing")
     if manifest.get("synthetic") is not True and not (dest_dir / "asset" / "wheels").is_dir():
         errors.append("offline_wheels_not_vendored")
     return errors
 
 
 def _checkpoint_errors(path: Path) -> list[str]:
+    from rsna_knee.models.dinov2 import Dinov2ViTS14
+    from rsna_knee.models.study import StudyModel
     from rsna_knee.training.checkpoint import torch_load
 
     try:
@@ -230,8 +286,30 @@ def _checkpoint_errors(path: Path) -> list[str]:
     errors: list[str] = []
     if blob.get("encoder_name") != "dinov2_vits14":
         errors.append("checkpoint_encoder")
-    if not isinstance(blob.get("model"), dict):
-        errors.append("checkpoint_state_missing")
     if int(blob.get("step") or 0) < 1:
         errors.append("checkpoint_no_optimizer_step")
+    weights = blob.get("model")
+    if not isinstance(weights, dict):
+        errors.append("checkpoint_state_missing")
+        return errors
+    img = int(blob.get("img_size") or 0)
+    if img <= 0:
+        errors.append("checkpoint_img_size")
+        return errors
+    model = StudyModel(Dinov2ViTS14(img_size=img), freeze_encoder=True)
+    try:
+        model.load_state_dict(weights, strict=True)
+    except Exception:
+        errors.append("checkpoint_state_mismatch")
+        return errors
+    try:
+        import torch
+
+        images = torch.zeros(1, 1, 1, 3, img, img)
+        with torch.no_grad():
+            out = model(images, torch.ones(1, 1), torch.ones(1, 1, 1))
+        if tuple(out.shape) != (1, 12):
+            errors.append("checkpoint_forward")
+    except Exception:
+        errors.append("checkpoint_forward")
     return errors

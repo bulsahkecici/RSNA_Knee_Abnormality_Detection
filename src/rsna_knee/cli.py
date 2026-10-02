@@ -78,18 +78,23 @@ def labels_pilot(
     limit: int = typer.Option(100, "--limit"),
     live: bool = typer.Option(False, "--live"),
     resume: bool = typer.Option(True, "--resume/--no-resume"),
+    run_id: str | None = typer.Option(None, "--run-id"),
 ) -> None:
     ensure_runtime_dirs()
     registry = Registry()
-    state = new_state("pilot", synthetic=not live)
+    state = new_state("pilot", synthetic=not live, run_id=run_id)
     state = stage_labels(state, registry, limit=limit, live=live, resume=resume)
     registry.upsert_run(state.run_id, state.profile, state.stage, state.model_dump(), state.synthetic)
     _print({"run_id": state.run_id, "stage": str(state.stage), "labels": state.artifacts.get("labels"), "live": live})
 
 
 @labels_app.command("run")
-def labels_run(resume: bool = typer.Option(True, "--resume/--no-resume"), live: bool = typer.Option(False, "--live")) -> None:
-    labels_pilot(limit=10**9, live=live, resume=resume)
+def labels_run(
+    resume: bool = typer.Option(True, "--resume/--no-resume"),
+    live: bool = typer.Option(False, "--live"),
+    run_id: str | None = typer.Option(None, "--run-id"),
+) -> None:
+    labels_pilot(limit=10**9, live=live, resume=resume, run_id=run_id)
 
 
 @cache_app.command("pilot")
@@ -175,7 +180,12 @@ def runtime_acquire(
 def worker_cmd(job_bundle: Path = typer.Option(..., "--job-bundle")) -> None:
     job = load_job_bundle(job_bundle)
     rec = run_job(job, FileTransport())
-    _print(rec.model_dump())
+    from rsna_knee.runtime.ingest import accept_into_registry
+
+    accepted = accept_into_registry(Registry(), job, rec.model_dump(), job_path=job_bundle)
+    payload = rec.model_dump()
+    payload["registry"] = accepted
+    _print(payload)
 
 
 @experiment_app.command("run")
@@ -186,6 +196,9 @@ def experiment_run(config: Path = typer.Option(..., "--config")) -> None:
     registry = Registry()
     state = new_state("pilot", synthetic=False)
     state.stage = Stage.NEEDS_RUNTIME
+    from rsna_knee.pipeline import resolve_train_config
+
+    train = resolve_train_config(state.profile, exp)
     job_dir = roots_for(False).runs / state.run_id / "job"
     job = build_job(
         run_id=state.run_id,
@@ -194,6 +207,9 @@ def experiment_run(config: Path = typer.Option(..., "--config")) -> None:
         dest=job_dir,
         synthetic=False,
         fencing_token=state.fencing_token,
+        resources={"config": str(config)},
+        train=train,
+        checkpoint_out="checkpoint.pt",
     )
     state.artifacts["job"] = str(job_dir / "job.json")
     state.artifacts["experiment"] = str(config)
@@ -248,17 +264,37 @@ def evaluate_cmd(run_id: str = typer.Option(..., "--run-id")) -> None:
 
 @app.command("audit")
 def audit_cmd(run_id: str = typer.Option(..., "--run-id")) -> None:
+    from rsna_knee.agents.auditor import revalidate_audit
+
     run = Registry().get_run(run_id) or Registry(roots_for(True).registry).get_run(run_id) or {}
-    path = (run.get("artifacts") or {}).get("audit")
-    if not path or not Path(path).is_file():
-        _print({"overall": "BLOCKED", "reason": "audit_artifact_missing", "run_id": run_id})
-        return
-    _print(json.loads(Path(path).read_text(encoding="utf-8")))
+    _print(revalidate_audit(run))
 
 
 @app.command("package")
 def package_cmd(run_id: str = typer.Option(..., "--run-id")) -> None:
-    _print(package_run(run_id))
+    from rsna_knee.pipeline import stage_package
+
+    registry = Registry()
+    run = registry.get_run(run_id)
+    if run is None:
+        registry = Registry(roots_for(True).registry)
+        run = registry.get_run(run_id)
+    if run is None:
+        _print(package_run(run_id))
+        return
+    state = PipelineState.model_validate(run)
+    state = stage_package(state, registry)
+    registry.upsert_run(state.run_id, state.profile, state.stage, state.model_dump(), state.synthetic)
+    _print(
+        {
+            "run_id": run_id,
+            "stage": str(state.stage),
+            "reason": state.blocked_reason,
+            "package": state.artifacts.get("package"),
+            "audit": state.artifacts.get("audit"),
+            "checkpoint": state.artifacts.get("checkpoint"),
+        }
+    )
 
 
 @app.command("submit")

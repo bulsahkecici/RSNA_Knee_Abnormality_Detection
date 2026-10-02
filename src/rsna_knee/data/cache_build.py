@@ -7,6 +7,7 @@ A missing study is quarantined. A missing series is a slot mask, not a fake stud
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -163,6 +164,14 @@ def _prior_reusable(
     return meta
 
 
+def _dicom_bytes_sha(files: list[Path]) -> str:
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(path.name.encode())
+        digest.update(sha256_file(path).encode())
+    return digest.hexdigest()
+
+
 def manifest_ready(path: Path) -> tuple[bool, str]:
     if not path.is_file():
         return False, "cache_manifest_missing"
@@ -209,23 +218,11 @@ def build_cache(
     index = CacheIndex(dest)
     studies: dict[str, Any] = {}
     quarantine: dict[str, Any] = {}
-    source_hashes = {"series_csv": sha256_file(series_csv)}
+    source_hashes = {"series_csv": sha256_file(series_csv), "dicom_root": str(dicom_root.resolve())}
     slot_names = [list(slot) for slot in PILOT_SLOTS]
     pp_hash = preprocess_hash({"size": size, "n_centers": n_centers, "slots": PILOT_SLOTS})
     expected_shape = [len(PILOT_SLOTS), n_centers, 3, size, size]
     for uid in uids:
-        prior = (index.data.get("studies") or {}).get(uid) if resume else None
-        reused = _prior_reusable(
-            prior,
-            pp_hash=pp_hash,
-            shape=expected_shape,
-            source_hashes=source_hashes,
-            slots=slot_names,
-            n_centers=n_centers,
-        )
-        if reused is not None:
-            studies[uid] = reused
-            continue
         rows = grouped.get(uid)
         if not rows:
             quarantine[uid] = {"reason": "missing_study_metadata"}
@@ -237,6 +234,26 @@ def build_cache(
             index.record_fail(uid, "missing_study_dicom")
             continue
         selected = select_series_for_slots(rows)
+        dicom_files: list[Path] = []
+        for slot in selected:
+            if slot is None:
+                continue
+            series_dir = study_dir / slot[SERIES_ID_COL]
+            if series_dir.is_dir():
+                dicom_files.extend(sorted(series_dir.glob("*.dcm")))
+        study_sources = {**source_hashes, "dicom_bytes": _dicom_bytes_sha(dicom_files)}
+        prior = (index.data.get("studies") or {}).get(uid) if resume else None
+        reused = _prior_reusable(
+            prior,
+            pp_hash=pp_hash,
+            shape=expected_shape,
+            source_hashes=study_sources,
+            slots=slot_names,
+            n_centers=n_centers,
+        )
+        if reused is not None:
+            studies[uid] = reused
+            continue
         slot_arrays: list[np.ndarray | None] = []
         slot_mask: list[float] = []
         order_mode = "none"
@@ -283,7 +300,7 @@ def build_cache(
             "preprocess_hash": pp_hash,
             "slot_mask": final_mask,
             "order": order_mode,
-            "source_hashes": source_hashes,
+            "source_hashes": study_sources,
             "slots": slot_names,
             "n_centers": n_centers,
             "synthetic": False,

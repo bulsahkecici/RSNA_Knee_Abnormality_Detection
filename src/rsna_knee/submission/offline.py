@@ -68,6 +68,7 @@ def run_offline_inference(
         raise FileNotFoundError("hidden-test metadata is missing")
     if not dicom_root.exists():
         raise FileNotFoundError(f"DICOM root missing: {dicom_root}")
+    started = time.perf_counter()
     with study_csv.open(newline="", encoding="utf-8") as handle:
         studies = [row[STUDY_ID_COL] for row in csv.DictReader(handle)]
     if not studies:
@@ -88,7 +89,6 @@ def run_offline_inference(
     dev = select_device(device)
     model = _load_model(checkpoint, img_size).to(dev)
     rows = []
-    started = time.perf_counter()
     with torch.no_grad():
         for uid in studies:
             volume = np.load(work / f"{uid}.npy")
@@ -112,6 +112,7 @@ def run_offline_inference(
     runtime["seconds_per_study"] = measured
     runtime["device"] = str(dev)
     runtime["stopwatch"] = True
+    runtime["includes_decode_and_load"] = True
     if seconds_per_study is not None:
         runtime["caller_seconds_per_study_ignored"] = seconds_per_study
     return {
