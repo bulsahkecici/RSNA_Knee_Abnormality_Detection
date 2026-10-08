@@ -13,7 +13,7 @@ Need weak labels from `train.csv` Report column.
 
 1. `rsna doctor` — confirm local LM Studio `/v1/models`.
 2. Set `RSNA_LMSTUDIO_MODEL_ID` to an exact listed id (preferred `qwen/qwen3.8-27b` if present).
-3. Probe json_schema; else json_object + local validation.
+3. Probe json_schema with the shared selector. If that selection succeeds, do not call json_object. Use reasoning_content only when `accept_reasoning_json` is true and the whole field is one schema-valid object. Else probe json_object and validate locally.
 4. `rsna labels pilot --limit 100 --live` then `rsna labels run --resume --live`.
 5. Quarantine invalid JSON / missing evidence. Do not auto-negative not_mentioned.
 

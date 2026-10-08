@@ -1,6 +1,6 @@
 # Competition snapshot
 
-**Retrieved:** 2026-10-02 via Kaggle CLI (`competitions pages list --content`, `topics show 733343`, `submission-limits`, `quota`, metadata CSVs).
+**Retrieved:** 2026-10-03 via Kaggle CLI (`competitions pages list --content`, `topics show 733343`, `submission-limits`, `quota`, metadata CSVs).
 
 ## Identity
 
@@ -9,7 +9,7 @@
 - Metric: macro-average ROC-AUC over 12 targets (Evaluation page).
 - Code competition: notebooks, internet disabled, ≤9 hours, `submission.csv`.
 - External data: freely & publicly available, including pretrained models (Code Requirements).
-- Team size max 5; 5 submissions/day; 2 final selections (rules + `submission-limits` this day: remaining 5).
+- Team size max 5; 5 submissions/day; 2 final selections (rules + `submission-limits` this day: remaining 5; 0 submissions before this run).
 - Winner license CC-BY-NC 4.0; data MIRA (rules). Unread subsections of the long rules page are **not guessed**.
 
 ## Timeline (UTC 23:59)
@@ -37,3 +37,7 @@ Confirmed: high-grade ACL/MCL; meniscal surface-contacting tear vs intrasubstanc
 ## Efficiency prize
 
 Documented on overview (formula with Benchmark, maxAUC, RuntimeSeconds/32400). Not used as a training target in this repo yet.
+
+## Refresh evidence — 2026-10-03
+
+Official pages, host discussion, and live limits were refreshed into `state/competition-intel-20261003/`. Data description explicitly uses `train_series/` and `test_series/`; inference was corrected to those directories. Evaluation column order, offline code requirements, and final deadline match the prior snapshot. No complete training-data conversion is required merely to submit a valid trained pilot.

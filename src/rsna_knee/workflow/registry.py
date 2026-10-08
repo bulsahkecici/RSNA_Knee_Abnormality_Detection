@@ -213,7 +213,7 @@ class Registry:
 
     def submission_for_kernel(self, kernel: str, version: str) -> dict[str, Any] | None:
         row = self._conn.execute(
-            "SELECT * FROM submissions WHERE kernel=? AND version=? AND status='SUBMITTED'",
+            "SELECT * FROM submissions WHERE kernel=? AND version=? AND status IN ('SUBMITTED', 'SCORED')",
             (kernel, str(version)),
         ).fetchone()
         if not row:

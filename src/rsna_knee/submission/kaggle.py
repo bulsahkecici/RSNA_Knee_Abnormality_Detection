@@ -17,15 +17,21 @@ from rsna_knee.workflow.registry import Registry
 _RECEIPT_RE = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)
 
 
-def _matching_receipt(found: Any, kernel: str, version: str) -> str | None:
+def _matching_receipt(found: Any, kernel: str, version: str, message: str | None = None) -> str | None:
     rows = found if isinstance(found, list) else []
     for item in rows:
         if not isinstance(item, dict):
             continue
-        if item.get("kernel") != kernel or str(item.get("version")) != str(version):
+        identity_matches = item.get("kernel") == kernel and str(item.get("version")) == str(version)
+        description_matches = (
+            message is not None
+            and "attempt=" in message
+            and item.get("description") == message
+        )
+        if not identity_matches and not description_matches:
             continue
         receipt = str(item.get("ref") or item.get("server_receipt") or "")
-        if _RECEIPT_RE.fullmatch(receipt):
+        if _RECEIPT_RE.fullmatch(receipt) or (receipt.isdigit() and int(receipt) > 0):
             return receipt
     return None
 SLUG = "rsna-knee-abnormality-detection"
@@ -60,6 +66,10 @@ def _identity_errors(registry: Registry, run_id: str, audit: dict[str, Any]) -> 
         return ["run_not_registered"]
     artifacts = run.get("artifacts") or {}
     errors: list[str] = []
+    for raw_path, digest in (audit.get("evidence_files") or {}).items():
+        path = Path(raw_path)
+        if not path.is_file() or sha256_file(path) != digest:
+            errors.append(f"audit_evidence_changed:{path.name}")
     ckpt = artifacts.get("checkpoint")
     if not ckpt or not Path(ckpt).is_file():
         errors.append("checkpoint_missing")
@@ -80,7 +90,8 @@ def _identity_errors(registry: Registry, run_id: str, audit: dict[str, Any]) -> 
 
 
 def _command(kernel: str, version: str, message: str, submission_file: str | None) -> dict[str, Any]:
-    argv = ["kaggle", "competitions", "submit", "-c", SLUG, "-k", kernel, "-v", str(version), "-m", message]
+    submission_file = submission_file or "submission.csv"
+    argv = ["kaggle", "competitions", "submit", SLUG, "-k", kernel, "-v", str(version), "-m", message]
     if submission_file:
         argv.extend(["-f", submission_file])
     return {
@@ -113,6 +124,7 @@ def submit_run(
         audit = stored
     elif stored is not None and audit is None:
         audit = stored
+    message = f"{message} [kernel={kernel} version={version} attempt={local_attempt_id}]"
     command = _command(kernel, version, message, submission_file)
     if not audit or not audit_allows_submit(audit, run_id=run_id, kernel=kernel, version=version):
         return _blocked(local_attempt_id, "audit_not_pass", command=command)
@@ -135,10 +147,18 @@ def submit_run(
         if history is None:
             return _blocked(local_attempt_id, "reconciliation_unavailable", command=command)
         found = history()
-        receipt = _matching_receipt(found, kernel, version)
+        prior_message = (pending.get("command") or {}).get("message")
+        receipt = _matching_receipt(found, kernel, version, prior_message)
         if receipt is None:
             return _blocked(local_attempt_id, "unresolved_attempt", command=command)
-        return _blocked(local_attempt_id, "reconciled_without_resubmit", server_receipt=receipt, command=command)
+        registry.put_submission(
+            pending["request_id"], run_id, "SUBMITTED",
+            {"local_attempt_id": pending["request_id"], "server_receipt": receipt,
+             "command": pending.get("command"), "history": found, "reconciled": True},
+            kernel=kernel, version=str(version),
+        )
+        return {"status": "SUBMITTED", "submitted": True, "scored": False,
+                "server_receipt": receipt, "local_attempt_id": pending["request_id"], "reconciled": True}
     provider = provider or KaggleProvider()
     if not execute:
         return {
@@ -173,7 +193,18 @@ def submit_run(
     receipt = out.get("stdout") or ""
     match = _RECEIPT_RE.search(receipt)
     server_receipt = match.group(1) if match else None
-    ok = out.get("returncode") == 0 and bool(server_receipt) and "successfully" in receipt.lower()
+    history_rows = None
+    if server_receipt is None and out.get("returncode") == 0:
+        history = getattr(provider, "list_submissions", None)
+        if history is not None:
+            try:
+                history_rows = history()
+                server_receipt = _matching_receipt(history_rows, kernel, version, message)
+            except Exception:
+                # Preserve an uncertain attempt; never blindly submit it twice.
+                pass
+    ok = (out.get("returncode") == 0 and bool(server_receipt)
+          and (history_rows is not None or "successfully" in receipt.lower()))
     if not ok or not server_receipt:
         registry.put_submission(
             local_attempt_id,
@@ -188,7 +219,7 @@ def submit_run(
         local_attempt_id,
         run_id,
         "SUBMITTED",
-        {"cli": out, "local_attempt_id": local_attempt_id, "server_receipt": server_receipt, "command": command},
+        {"cli": out, "local_attempt_id": local_attempt_id, "server_receipt": server_receipt, "command": command, "history": history_rows},
         kernel=kernel,
         version=str(version),
     )

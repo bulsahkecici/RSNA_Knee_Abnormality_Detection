@@ -92,12 +92,13 @@ class KaggleProvider:
                 "kaggle",
                 "competitions",
                 "submit",
-                "-c",
                 SLUG,
                 "-k",
                 kernel,
                 "-v",
                 str(version),
+                "-f",
+                "submission.csv",
                 "-m",
                 message,
             ]
@@ -105,5 +106,34 @@ class KaggleProvider:
         return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
 
     def submission_limits(self) -> dict[str, Any]:
-        proc = _run(["kaggle", "competitions", "submission-limits", "-c", SLUG])
+        proc = _run(["kaggle", "competitions", "submission-limits", SLUG])
         return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+
+    def list_submissions(self) -> list[dict[str, Any]]:
+        import json
+
+        proc = _run(["kaggle", "competitions", "submissions", SLUG, "--format", "json"])
+        if proc.returncode != 0:
+            raise RuntimeError("Kaggle submission history is unavailable")
+        if "No submissions found" in proc.stdout:
+            return []
+        rows = json.loads(proc.stdout)
+        if not isinstance(rows, list):
+            raise RuntimeError("Kaggle submission history is not a list")
+        return rows
+
+    def get_submission(self, receipt: str) -> dict[str, Any]:
+        from kaggle.api.kaggle_api_extended import KaggleApi
+        from kagglesdk.competitions.types.competition_api_service import ApiGetSubmissionRequest
+
+        api = KaggleApi()
+        api.authenticate()
+        request = ApiGetSubmissionRequest()
+        request.ref = int(receipt)
+        with api.build_kaggle_client() as client:
+            row = client.competitions.competition_api_client.get_submission(request)
+        return {
+            "ref": row.ref, "status": str(row.status), "publicScore": row.public_score,
+            "privateScore": row.private_score, "errorDescription": row.error_description,
+            "url": row.url,
+        }

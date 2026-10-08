@@ -13,6 +13,6 @@ Setup:
 4. `rsna doctor` then `rsna labels pilot --limit 5 --live`
 
 Structured output: https://lmstudio.ai/docs/developer/openai-compat/structured-output  
-If `json_schema` fails, the client reports a downgrade to `json_object` plus local schema validation. Missing server → quarantine, no fake labels.
+`json_schema` is probed first. A successful selection, including a config-enabled `reasoning_content` object when `content` is empty, does not call `json_object`. `json_object` is tried only after `json_schema` selection fails, and only that probed mode is used for extraction. `accept_reasoning_json` must be true before an empty `content` can accept a `reasoning_content` value that is entirely one schema-valid JSON object. Explanatory text is rejected. Missing server → quarantine, no fake labels. HTTP status text and the empty-response reason are printed by `rsna labels`.
 
 Thinking: config `thinking: off` for bulk extraction. Do not invent undocumented sampling keys.

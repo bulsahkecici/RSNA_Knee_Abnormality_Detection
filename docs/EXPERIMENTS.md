@@ -1,6 +1,6 @@
 # Experiments
 
-Bounded first queue (none trained on real MRI in this install):
+Defined experiment queue (live pilot runs are recorded below):
 
 | ID | Family | Variable | Status |
 | --- | --- | --- | --- |
@@ -12,3 +12,160 @@ Bounded first queue (none trained on real MRI in this install):
 Champion rule: audit + baseline delta + uncertainty + source legitimacy + runtime + finite outputs. `AUC >= 0.86` is not enough.
 
 Synthetic smoke metrics must stay `kind=synthetic`.
+
+## Live GPU pilot — 2026-10-03
+
+Run `pilot-gpu-20261003` completed on Kaggle kernel
+[bulsahkecici/rsna-knee-training-pilot, version 1](https://www.kaggle.com/code/bulsahkecici/rsna-knee-training-pilot).
+The verified worker handshake reports Tesla T4. Frozen DINOv2 ViT-S/14 at 224 px
+trained for two epochs on 26 supervised studies with 8 optimizer updates.
+The official Meta download matched the local weight allowlist; no published checksum claim is made.
+
+The cache contains 117 real studies with zero quarantines. Folds, duplicate groups,
+and gold-eval exclusions passed before the job was sent. Numeric canonical labels
+were uploaded privately; raw radiology reports stayed on the Mac.
+
+Gold holdout: 29 studies, 12 defined class AUCs, macro AUC 0.530851.
+This is a small pilot holdout, not a competition score or complete independent OOF result.
+Group-bootstrap 95% macro-AUC interval: 0.466964–0.593088 (1909 / 2000 replicates retain all 12 classes).
+The fold-0 metric called `weak_metrics` contains 15 cached studies but only five
+with observed targets in this snapshot; those five use gold labels. It must not
+be reported as validation of weak-label accuracy.
+
+Decision: pilot only; not champion, not submission-ready. Production audit failed.
+No Kaggle competition submission was made. Checkpoint, result record, input hashes,
+and finite predictions were verified after download. There is no prior baseline delta.
+See `artifacts/runs/pilot-gpu-20261003/` for metrics, review, audit, and checkpoint.
+
+Local label expansion retained 4 valid weak rows and
+quarantined 3 rows due to non-verbatim evidence. The large batch
+was stopped for quality review; its SQLite resume cache remains intact. Resolve
+these evidence errors using a non-gold-eval development set before scaling labels
+and running a larger training pilot. The GPU training snapshot used three valid
+weak rows and all 58 numeric gold rows; the later fourth valid weak row did not
+enter this trained checkpoint.
+
+## First real submission — 2026-10-03
+
+The pilot checkpoint was packaged with Linux Python 3.13 offline DICOM decoder
+wheels. Kaggle inference kernel `bulsahkecici/rsna-knee-first-infer`, version 2,
+completed with internet disabled. Thirty real training studies were decoded
+again and matched the existing uint8 cache shard hashes exactly. Decode-inclusive
+benchmark: 60.509 s / 30 studies, projecting 2622.063 s for approximately 1300
+hidden studies. This is a projection, not a time guarantee.
+
+Submission eligibility audit now passes all ten gates from these downloaded
+artifacts. The code/weights package is frozen with SHA256
+`733f5caa0338cd49acfea6f6e01fe9e988497503fa236c3f83ef6525ba3cbad4`.
+This does not change the pilot-only model-quality decision.
+
+Kaggle server submission ID: **56786806**, kernel version **2**. The CLI omitted
+the receipt text; it was reconciled against the unique attempt description in
+Kaggle's actual submission history. One submission was sent. Scoring was PENDING
+at registration; the durable scorer watcher records its final server result in
+`artifacts/runs/pilot-gpu-20261003/scoring-status.json`. No public score is inferred
+from the local gold holdout.
+
+### Hidden rerun error and retry
+
+The single-submission API returned COMPLETE with an error description and no public score for 56786806: Notebook Threw Exception. The list-submissions endpoint retained a stale PENDING status. The status poller now reads the exact submission detail and treats a nonempty error description as ERROR, never SCORED. The failed package and receipt remain preserved; this attempt was not successful.
+
+Kaggle does not expose a traceback through the available submission details. Two identified failure paths were addressed without claiming a proven root cause: training-data benchmark execution during hidden reruns/incomplete mounts, and a single invalid DICOM series aborting an otherwise decodable study. Hidden reruns skip the benchmark. Inference masks failed series explicitly and keeps other valid image slots; training remains strict, and an entirely undecodable study is still quarantined instead of silently fabricated. The retry rehearsal checks 117 real DICOM studies and exact cache parity before a new submission.
+
+Retry offline rehearsal: kernel version 4 COMPLETE, internet disabled, 117 actual DICOM studies decoded with zero quarantine or partial-series failures; all 117 uint8 shard hashes matched. Runtime 254.767 s, projection 2830.748 s for 1300 studies. Ten eligibility gates passed. Frozen retry package SHA256: `7296edec3833e199d79e3763590f80e04585c2c1a46a6e8b5d2f7454d5978154`.
+
+Second real submission receipt: **56787970**, inference kernel version **4**. Sent once after the failed v2 attempt. Public scoring still pending at registration.
+
+### First successful scored submission
+
+Kaggle submission **56787970**, kernel version **4**, completed without a server error and received real public score **0.49**. The exact receipt and server record are saved in `artifacts/runs/pilot-gpu-20261003/scoring-status.json`; registry run and submission stages are SCORED. This completes the first real, successfully scored submission objective. Two competition submissions were used: v2 failed, v4 scored. The frozen successful package hash remained unchanged.
+
+Model-quality decision remains pilot only, not champion: public AUC 0.49 is low and below the 0.50 random-ranking reference. The actual local gold holdout AUC 0.53085 is a different measurement and must not replace this public result. Scaling valid local weak labels, expanding image training, and additional held-out review would be required to improve performance.
+
+## Label repair and next campaign — 2026-10-03
+
+The three previously quarantined records contain four whitespace-only evidence
+mismatches. A local replay now recovers each unique verbatim source span and
+passes the unchanged strict validator. Word, punctuation, case changes and
+ambiguous matches remain rejected. The evidence policy and updated prompt
+invalidate older resume keys; raw responses for repaired spans are preserved
+only in local provenance.
+
+Live development run `labels-dev-20261003-v2`: five reports, five valid, zero
+quarantines, zero recovered spans needed. Across 60 targets: 6 positives,
+23 explicit negatives, 2 borderline negative hints, 1 uncertain, 28 unmentioned.
+Uncertain/unmentioned remain masked. All gold UIDs and gold-eval duplicate groups
+are excluded from development extraction. This verifies schema/evidence, not
+clinical label accuracy.
+
+The 100-new-report development pilot `labels-dev-20261003-v2-100` is running
+locally, reusing the five valid current-version cache entries. Numeric progress
+is written to
+`state/campaigns/campaign-20261003-v2/local-label-progress.json`.
+No new model-quality score is available.
+
+`rsna campaign` prepares a sequential workflow: development evidence gate,
+full local extraction, numeric labels with gold reserved for held-out evaluation,
+private Kaggle CPU cache, then separate eight-epoch frozen and last-block
+fine-tuning jobs on shared inputs. The remote preparation excludes raw reports,
+SQLite, extractor envelopes, and credentials. Gold evaluation never enters
+image training. Completed remote results require experiment review before
+OOF expansion, ensemble, or competition submission.
+
+The automatic approval reviewer rejected the remote workflow launch because
+the sensitive payload and destination were not sufficiently authorized/verified.
+Read-only follow-up confirmed the configured owner `bulsahkecici` and that the
+existing RSNA kernels appear under authenticated `kernels list --mine`.
+The exact private destinations, allowed file/field schema, and a 63-row numeric
+preview SHA256 are recorded in
+`state/campaigns/campaign-20261003-v2/authorization-manifest.json`.
+Explicit approval was requested. The remote campaign has **not** started;
+no new Kaggle upload, GPU job, or competition submission was made.
+
+Validation: 104 tests passed; three pre-existing DICOM fixture UID warnings.
+The new campaign templates compile and their privacy/split gates pass fixture
+tests. They have not yet been verified on live remote campaign data.
+
+### Development pilot completion
+
+`labels-dev-20261003-v2-100` completed: 100 new attempts, 99 valid, one quarantine; with five cached current-version successes, 104 valid records and 836 observed training targets. Strict local source-evidence and selection gate passed (1/105 rejected). This is not a clinical accuracy estimate. Full local development extraction `labels-full-20261003-v2` was started with resume and the same gold/duplicate exclusions. Remote upload/GPU approval remains pending; no new remote campaign was launched.
+
+### Explicit remote authorization and controller startup
+
+The user explicitly approved the private Kaggle workflow. The authorization manifest now records `EXPLICIT_USER_APPROVAL_RECEIVED`. Controller `campaign-20261003-v2` was launched with idle-sleep prevention; it adopted the completed development pilot and is `WAITING_FOR_LOCAL_LABELS` on the existing `labels-full-20261003-v2` job. No second LLM job or repeated pilot was started. After the full local evidence gate passes, it will prepare the private CPU cache and run frozen and last-block fine-tuning jobs sequentially. No remote job had been pushed at this startup verification. A new adoption test verifies final registry state, real-run identity, and label hash before reuse.
+
+
+### rsna-ab-20261008-v2-frozen
+Real remote training completed, exit_reason=ok; 3366 train studies, 3368 updates. Gold holdout (29 studies) macro AUC 0.68239079; weak holdout (824 studies) macro AUC 0.75065202. No competition submission or leaderboard score. v3 comparison still running; do not select a winner yet.
+
+
+### v3 interactive result comparison
+User downloaded v3 metrics: kind=real, 3368 updates, same 3366 training UIDs as v2, gold eval excluded. Gold AUC v3=0.73150272 versus v2=0.68239079 (delta +0.04911193); weak AUC v3=0.76245724 versus v2=0.75065202. Ten of twelve gold target AUCs improved, MCL and lateral meniscus declined. Prefer v3 for next development experiment, conditional on collecting interactive checkpoint/provenance. API saved version still ERROR; no leaderboard submission. Only 29 gold studies, no paired uncertainty computed.
+
+
+### v3 fine-tune launch
+Verified user-provided checkpoint SHA e1a26f02dc46a5bc74ee09bf4c1e995e98aa4b3535885309ac55f002c82dfeac (frozen 3368 steps). Private checkpoint dataset ready. Private kernel rsna-v3-finetune-20261008-finetune version 1 pushed with receipt. New model warm-start experiment, 4 epochs, head lr 1e-4, last-block lr 1e-5; optimizer/scheduler reset, same v3 cache/folds/labels and 3366 train studies. No leaderboard submission; await real evaluation.
+
+
+### v3 fine-tune result
+Real run COMPLETE, exit_reason=ok, same training UIDs and gold excluded. Gold holdout AUC 0.75068253 versus frozen 0.73150272; weak AUC 0.77612742 versus 0.76245724. 1684 updates. Only 29 gold studies; no uncertainty computed or submission performed. Detailed local result: state/campaigns/rsna-ab-20261008/finetune-comparison.json.
+
+
+### v3 offline packaging check
+Fine-tuned checkpoint hash verified against metrics; private offline asset includes exact v3 data preprocessing modules, interior centers 0.15/0.50/0.85, strict decoding, local Linux codec wheels and file hashes. Private kernel rsna-v3-offline-check-20261008 version 1 acknowledged and RUNNING, Internet disabled. Measures end-to-end on 30 real train studies and produces visible-test CSV when mounted, with finite/column/UID validation. No competition submission. Results pending.
+
+
+### v3 offline check version 2 completed
+Internet-disabled real 30-study benchmark and visible-test CSV inference completed. Finite probabilities and schema/unique UID checks passed. Results: artifacts/kaggle/v3-offline-check/output-v2. Runtime projection is an estimate based on 30 studies, not a hidden-test guarantee. No competition submission performed.
+
+
+### v3 competition submission receipt
+Final inference kernel version 1 COMPLETE; submission ref 56973673 confirmed in Kaggle submissions API, PENDING, no public score yet. Previous scored pilot 0.490; local fine-tuned gold AUC 0.75068253 is not a leaderboard score.
+
+
+### Public result and seed 2047 experiment
+Kaggle submission 56973673 COMPLETE, public score 0.740 confirmed by API (previous pilot 0.490). New private kernel rsna-v3-seed2047-20261009 version 1 pushed, QUEUED. Same frozen v3 initialization, cache, labels, folds and four-epoch fine-tune recipe; seed changed 2026 to 2047. This is shared-initialization ensemble diversity, not independent pretraining. Compare aligned heldout probabilities and equal-weight average before selecting next submission.
+
+
+### seed 2047 and ensemble decision
+Second seed COMPLETE, real gold AUC 0.74756610; seed 2026 0.75068253. Equal probability average 0.74832980. Weak AUCs 0.77553664 / 0.77612742 / ensemble 0.77576533. Exact prediction UID alignment and finite values checked. Do not replace public 0.740 model or submit ensemble: no validation improvement. Autonomous local poller started (60 seconds, macOS notifications on change and hourly), auto-collection and comparison enabled. No automatic OS reboot startup.

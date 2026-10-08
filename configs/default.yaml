@@ -39,3 +39,4 @@ lmstudio:
   timeout_seconds: 180
   max_retries: 2
   auto_downgrade_on_malformed: false
+  accept_reasoning_json: true

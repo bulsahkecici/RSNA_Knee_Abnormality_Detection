@@ -64,6 +64,7 @@ class LmStudioConfig(BaseModel):
     timeout_seconds: float = 180.0
     max_retries: int = 2
     auto_downgrade_on_malformed: bool = False
+    accept_reasoning_json: bool = False
 
 
 class LabelsConfig(BaseModel):

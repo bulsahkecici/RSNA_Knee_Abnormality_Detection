@@ -113,3 +113,34 @@ def test_server_receipt_differs_from_local_attempt_and_is_unique(tmp_path):
     assert again["status"] == "BLOCKED"
     assert again["reason"] == "duplicate_kernel_version"
     assert provider.calls == 1
+
+
+def test_numeric_receipt_requires_matching_attempt():
+    from rsna_knee.submission.kaggle import _matching_receipt
+
+    message = 'pilot [kernel=owner/kernel version=2 attempt=unique-id]'
+    rows = [{'ref': 12345, 'description': message}]
+    assert _matching_receipt(rows, 'owner/kernel', '2', message) == '12345'
+    assert _matching_receipt(rows, 'owner/kernel', '2', 'other attempt=other-id') is None
+    assert _matching_receipt([{'ref': 0, 'description': message}], 'owner/kernel', '2', message) is None
+
+
+def test_cli_text_receipt_is_reconciled_from_actual_history(tmp_path):
+    registry = Registry(tmp_path / 'reg.sqlite')
+    audit = _bind(tmp_path, registry, '2')
+
+    class Numeric(_Provider):
+        def submit_kernel(self, kernel, version, message):
+            self.calls += 1
+            self.message = message
+            return {'returncode': 0, 'stdout': 'Successfully submitted to the competition', 'stderr': ''}
+
+        def list_submissions(self):
+            return [{'ref': 98765, 'description': self.message, 'status': 'PENDING'}]
+
+    provider = Numeric()
+    out = submit_run('run', 'owner/kernel', '2', 'msg', registry=registry, execute=True, provider=provider, audit=audit)
+    assert out['status'] == 'SUBMITTED'
+    assert out['server_receipt'] == '98765'
+    assert registry.submission_for_kernel('owner/kernel', '2')['server_receipt'] == '98765'
+    assert provider.calls == 1

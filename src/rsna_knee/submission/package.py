@@ -102,6 +102,9 @@ def package_run(
     dest_root: Path | None = None,
     synthetic: bool = False,
     checkpoint: Path | None = None,
+    offline_wheels: Path | None = None,
+    dataset_slug: str | None = None,
+    kernel_slug: str | None = None,
 ) -> dict[str, Any]:
     ensure_runtime_dirs()
     dest_root = dest_root or SUBMISSIONS_DIR
@@ -142,15 +145,41 @@ def package_run(
         if src_tree.is_dir():
             shutil.copytree(src_tree, asset_dir / "src", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"), dirs_exist_ok=True)
     user = _kaggle_username()
-    dataset_slug = f"{user}/rsna-knee-runtime" if user else None
+    dataset_slug = dataset_slug or (f"{user}/rsna-knee-runtime" if user else None)
     dataset_meta = {
-        "title": "rsna-knee-runtime",
+        "title": dataset_slug.split("/")[-1] if dataset_slug else "rsna-knee-runtime",
         "id": dataset_slug,
         "licenses": [{"name": "CC-BY-NC-4.0"}],
     }
     (asset_dir / "dataset-metadata.json").write_text(json.dumps(dataset_meta, indent=2), encoding="utf-8")
     (asset_dir / "bootstrap.py").write_text(_BOOTSTRAP, encoding="utf-8")
     deps = offline_dependency_manifest()
+    if offline_wheels is not None:
+        import zipfile
+        from email.parser import BytesParser
+
+        wheel_files = sorted(offline_wheels.glob("*.whl"))
+        if not wheel_files:
+            raise ValueError("offline wheel directory is empty")
+        wheel_dest = asset_dir / "wheels"
+        wheel_dest.mkdir()
+        packages = []
+        for wheel in wheel_files:
+            with zipfile.ZipFile(wheel) as archive:
+                metadata_files = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+                if len(metadata_files) != 1:
+                    raise ValueError(f"invalid wheel metadata: {wheel.name}")
+                meta = BytesParser().parsebytes(archive.read(metadata_files[0]))
+            packages.append({"name": meta["Name"], "version": meta["Version"]})
+            shutil.copy2(wheel, wheel_dest / wheel.name)
+        deps.update(
+            packages=packages,
+            wheels_vendored=True,
+            wheel_hashes={wheel.name: sha256_file(wheel) for wheel in wheel_files},
+            preinstalled_runtime=["numpy", "torch", "pillow", "pydantic", "pyyaml", "scikit-learn", "filelock"],
+            note="Codec wheels are vendored. Preinstalled runtime must be verified by a real offline Kaggle rehearsal.",
+        )
+        deps["install_argv"].insert(5, "--no-deps")
     (asset_dir / "offline-deps.json").write_text(json.dumps(deps, indent=2), encoding="utf-8")
     (asset_dir / "requirements.txt").write_text(
         "\n".join(f"{item['name']}=={item['version']}" for item in deps["packages"] if item.get("version")) + "\n",
@@ -175,8 +204,8 @@ def package_run(
                 shutil.copy2(path, dest_dir / path.name)
     user = _kaggle_username()
     kernel_meta = {
-        "id": f"{user}/rsna-knee-infer" if user else None,
-        "title": "rsna-knee-infer",
+        "id": kernel_slug or (f"{user}/rsna-knee-infer" if user else None),
+        "title": kernel_slug.split("/")[-1] if kernel_slug else "rsna-knee-infer",
         "code_file": "notebooks/04_kaggle_inference.ipynb",
         "language": "python",
         "kernel_type": "notebook",

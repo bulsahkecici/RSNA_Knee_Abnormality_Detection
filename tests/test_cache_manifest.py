@@ -95,3 +95,31 @@ def test_cache_orders_geometry_and_quarantines_missing_study(tmp_path):
     assert "sha256" in meta
     volume = np.load(tmp_path / "cache" / f"{study}.npy")
     assert volume.shape[2] == 3
+
+
+def test_inference_masks_bad_series_but_never_caches_empty_study(tmp_path, monkeypatch):
+    rows = [
+        {STUDY_ID_COL: 'study', SERIES_ID_COL: 'bad', 'Anatomical_Plane': 'Sagittal', 'Fluid_Sensitive': '1'},
+        {STUDY_ID_COL: 'study', SERIES_ID_COL: 'good', 'Anatomical_Plane': 'Coronal', 'Fluid_Sensitive': '1'},
+    ]
+    series_csv = tmp_path/'series.csv'
+    with series_csv.open('w', newline='') as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    (tmp_path/'dicom'/'study').mkdir(parents=True)
+    monkeypatch.setattr('rsna_knee.data.cache_build._load_slices',
+                        lambda p: ([], 'codec_or_decode:test') if p.name == 'bad' else ([(None, None)], None))
+    monkeypatch.setattr('rsna_knee.data.cache_build.series_to_centers',
+                        lambda pairs, **kwargs: (np.ones((3, 3, 28, 28), dtype=np.float32), 'test'))
+    result = build_cache(series_csv=series_csv, dicom_root=tmp_path/'dicom', dest=tmp_path/'partial',
+                         strict_series=False, size=28)
+    assert result['studies']['study']['slot_mask'] == [0.0, 1.0, 0.0]
+    assert result['studies']['study']['series_errors'][0]['series'] == 'bad'
+    strict = build_cache(series_csv=series_csv, dicom_root=tmp_path/'dicom', dest=tmp_path/'strict', size=28)
+    assert 'study' in strict['quarantine']
+    monkeypatch.setattr('rsna_knee.data.cache_build._load_slices', lambda p: ([], 'codec_or_decode:test'))
+    empty = build_cache(series_csv=series_csv, dicom_root=tmp_path/'dicom', dest=tmp_path/'empty',
+                        strict_series=False, size=28)
+    assert 'study' in empty['quarantine']
+    assert not (tmp_path/'empty'/'study.npy').exists()

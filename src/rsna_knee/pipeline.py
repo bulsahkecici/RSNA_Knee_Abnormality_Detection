@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -279,6 +280,8 @@ def stage_labels(
     limit: int = 100,
     live: bool = False,
     resume: bool = True,
+    development_only: bool = False,
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> PipelineState:
     roots = _roots(state)
     rows: list[dict[str, Any]] = []
@@ -346,20 +349,39 @@ def stage_labels(
             if info.raw.get(key):
                 revision = str(info.raw[key])
                 break
-        mode = client.probe_json_schema(info.id)
-        if mode == "none":
+        probe = client.probe_json_schema(
+            info.id,
+            allow_reasoning_json=cfg.lmstudio.accept_reasoning_json,
+            thinking=str(cfg.lmstudio.thinking) if cfg.lmstudio.thinking else None,
+        )
+        state.artifacts["json_probe"] = json.dumps(probe.as_dict(), ensure_ascii=False)
+        if probe.mode == "none":
             client.close()
             state.stage = Stage.BLOCKED
             state.blocked_reason = "json_capability_none"
-            state.next_action_tr = "LM Studio JSON üretemiyor. Sahte etiket yazılmadı."
+            state.next_action_tr = (
+                "LM Studio JSON üretemiyor. "
+                f"HTTP: {probe.http_error or 'yok'}. "
+                f"Boş yanıt: {probe.empty_reason or 'yok'}. "
+                "Sahte etiket yazılmadı."
+            )
             return state
         store = LabelStore(roots.labels / "label_cache.sqlite")
         train = METADATA_DIR / "train.csv"
         with train.open(newline="", encoding="utf-8") as handle:
             reader = list(csv.DictReader(handle))
+        if development_only:
+            folds = load_folds(roots.state / "folds.csv")
+            assert_group_integrity(folds)
+            allowed = set(image_training_uids(folds))
+            gold = {r["StudyInstanceUID"] for r in folds if r.get("is_gold") == "1"}
+            reader = [r for r in reader if r["StudyInstanceUID"] in allowed - gold]
+            state.artifacts["label_selection"] = "non_gold_development_only"
         done = 0
+        attempted = 0
+        rejected = 0
         for row in reader:
-            if done >= limit:
+            if attempted >= limit:
                 break
             uid = row["StudyInstanceUID"]
             if looks_synthetic_uid(uid):
@@ -374,19 +396,45 @@ def stage_labels(
                 model_id=info.id,
                 model_revision=revision or "",
                 store=store,
-                json_mode=mode,
+                json_mode=probe.mode,
                 temperature=cfg.lmstudio.temperature,
                 max_retries=cfg.lmstudio.max_retries,
                 context_tokens=cfg.lmstudio.context_tokens,
                 output_tokens=cfg.lmstudio.output_tokens,
                 thinking=str(cfg.lmstudio.thinking),
                 use_cache=resume,
+                allow_reasoning_json=cfg.lmstudio.accept_reasoning_json,
             )
             rows.append(out)
-            if out.get("status") == "ok" and not out.get("cached"):
-                done += 1
+            if not out.get("cached"):
+                attempted += 1
+                if out.get("status") == "ok":
+                    done += 1
+                else:
+                    rejected += 1
+                if progress:
+                    progress({"attempted": attempted, "valid": done, "quarantined": rejected})
+                # Stop a failing extractor before it processes thousands of reports.
+                if attempted >= 10 and rejected / attempted > 0.2:
+                    state.blocked_reason = "label_quality_failure_rate"
+                    break
         client.close()
-        state.stage = Stage.LABELS_READY if done or store.successful_uids() else Stage.LABEL_PILOT
+        state.artifacts["label_counts"] = json.dumps({"attempted": attempted, "valid": done, "quarantined": rejected})
+        label_errors = [row.get("reason") for row in rows if row.get("status") == "quarantine" and row.get("reason")]
+        if label_errors:
+            state.artifacts["label_errors"] = json.dumps(label_errors[:8], ensure_ascii=False)
+        response_fields = sorted(
+            {
+                (row.get("provenance") or {}).get("response_field")
+                for row in rows
+                if isinstance((row.get("provenance") or {}).get("response_field"), str)
+            }
+        )
+        if response_fields:
+            state.artifacts["response_fields"] = json.dumps(response_fields)
+        state.stage = Stage.LABELS_READY if any(r.get("status") == "ok" for r in rows) else Stage.LABEL_PILOT
+        if state.blocked_reason == "label_quality_failure_rate":
+            state.stage = Stage.BLOCKED
     dest = roots.labels / f"{state.run_id}-labels.jsonl"
     dest.parent.mkdir(parents=True, exist_ok=True)
     with dest.open("w", encoding="utf-8") as handle:
@@ -401,7 +449,11 @@ def stage_labels(
     state.artifacts["labels_raw"] = str(dest)
     state.artifacts["labels"] = canonical["path"]
     state.hashes["labels"] = sha256_file(Path(canonical["path"]))
-    state.next_action_tr = "Cache pilotunu çalıştırın. Ham raporları cloud agent'a yapıştırmayın."
+    state.next_action_tr = (
+        "Etiket hata oranı %20'yi geçti; yerel inceleme gerekir."
+        if state.blocked_reason == "label_quality_failure_rate"
+        else "Cache pilotunu çalıştırın. Ham raporları cloud agent'a yapıştırmayın."
+    )
     return state
 
 
@@ -663,6 +715,18 @@ def stage_evaluate(state: PipelineState, registry: Registry) -> PipelineState:
 
 def stage_audit(state: PipelineState, registry: Registry) -> PipelineState:
     roots = _roots(state)
+    if not state.synthetic and state.artifacts.get("offline_proof"):
+        from rsna_knee.submission.evidence import audit_candidate
+
+        result = audit_candidate(state)
+        path = roots.runs / state.run_id / "audit.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        state.artifacts["audit"] = str(path)
+        state.hashes["audit"] = sha256_file(path)
+        state.stage = Stage.AUDITING
+        state.blocked_reason = None if result.get("overall") == "PASS" else result.get("reason", "audit_blocks_submit")
+        return state
     metrics: dict[str, Any] = {}
     mp = state.artifacts.get("metrics")
     if mp and Path(mp).exists():
@@ -699,12 +763,17 @@ def stage_audit(state: PipelineState, registry: Registry) -> PipelineState:
 
 def stage_package(state: PipelineState, registry: Registry) -> PipelineState:
     roots = _roots(state)
+    previous_stage = state.stage
+    existing_package = state.artifacts.get("package")
     ckpt_path = Path(state.artifacts["checkpoint"]) if state.artifacts.get("checkpoint") else None
     pkg = package_run(
         state.run_id,
-        dest_root=roots.submissions,
+        dest_root=Path(existing_package).parent if existing_package else roots.submissions,
         synthetic=state.synthetic,
         checkpoint=ckpt_path if ckpt_path and ckpt_path.is_file() else None,
+        offline_wheels=Path(state.artifacts["offline_wheels"]) if state.artifacts.get("offline_wheels") else None,
+        dataset_slug=state.artifacts.get("dataset_slug"),
+        kernel_slug=state.artifacts.get("inference_kernel"),
     )
     if state.synthetic:
         items = _items_from_synthetic(roots.cache)
@@ -732,7 +801,7 @@ def stage_package(state: PipelineState, registry: Registry) -> PipelineState:
     identity_errors = list(pkg.get("identity_errors") or [])
     if state.synthetic and "synthetic_namespace" not in identity_errors:
         identity_errors.append("synthetic_namespace")
-    elif not identity_errors:
+    elif not identity_errors and not state.artifacts.get("offline_proof"):
         identity_errors.append("not_live_verified")
     kernel = None
     kernel_meta = Path(pkg["dir"]) / "kernel-metadata.json"
@@ -759,7 +828,12 @@ def stage_package(state: PipelineState, registry: Registry) -> PipelineState:
         "kernel": kernel,
         "version": state.artifacts.get("kernel_version"),
     }
-    result = audit_run(payload, production=True)
+    if not state.synthetic and state.artifacts.get("offline_proof"):
+        from rsna_knee.submission.evidence import audit_candidate
+
+        result = audit_candidate(state)
+    else:
+        result = audit_run(payload, production=True)
     audit_file = roots.runs / state.run_id / "audit.json"
     audit_file.parent.mkdir(parents=True, exist_ok=True)
     audit_file.write_text(json.dumps(result, indent=2), encoding="utf-8")
@@ -769,7 +843,7 @@ def stage_package(state: PipelineState, registry: Registry) -> PipelineState:
     approved = result.get("overall") == "PASS" and not identity_errors and copied_hash is not None
     if approved:
         (Path(pkg["dir"]) / "FROZEN").write_text(pkg["sha256"], encoding="utf-8")
-        state.stage = Stage.READY_TO_SUBMIT
+        state.stage = previous_stage if previous_stage in {Stage.SUBMITTED, Stage.SCORED} else Stage.READY_TO_SUBMIT
     else:
         state.stage = Stage.BLOCKED
         state.blocked_reason = identity_errors[0] if identity_errors else "audit_blocks_submit"

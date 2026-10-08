@@ -4,6 +4,8 @@ Date: 2026-10-03. Review `RSNA_Repo_Inceleme_3e8c69c.md` was checked against com
 
 Live LM Studio, official DINOv2 weights, CUDA, real MRI, and Kaggle were not checked in this pass. Example tests use fixture allowlist weights; `weights_official` stays false.
 
+LM Studio structured output now shares one selector between the probe and extraction. Empty `content` can use `reasoning_content` only when `accept_reasoning_json` is true and the whole field is one schema-valid object. The live shape `content=""`, `reasoning_content='{"ok": true}'`, `finish_reason=stop`, plus an HTTP 400 `json_object` rejection, is a regression fixture. The local server was not probed again in this pass.
+
 `state/folds.csv` had been overwritten by an older test (`StudyInstanceUID,fold` / `REAL,0`). It was rebuilt from `data/metadata/train.csv`: 4407 studies, 58 gold, 29 gold-eval. Fixture label files `real-labels.jsonl` and `syn-*-labels.jsonl` were removed from `data/labels`. Tests now redirect real roots with `RSNA_ROOTS`.
 
 | Item | Implemented | Tested offline | Live verified | Blocked |

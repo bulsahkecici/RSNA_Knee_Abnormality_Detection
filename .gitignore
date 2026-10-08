@@ -38,6 +38,8 @@ data/dicom/**
 *.nii.gz
 
 # Artifacts / state / logs
+artifacts/kaggle/
+artifacts/offline-wheels/
 artifacts/runs/**
 !artifacts/runs/.gitkeep
 artifacts/submissions/**

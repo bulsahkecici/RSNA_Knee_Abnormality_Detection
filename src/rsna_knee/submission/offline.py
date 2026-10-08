@@ -80,6 +80,7 @@ def run_offline_inference(
         study_ids=studies,
         size=img_size,
         n_centers=n_centers,
+        strict_series=False,
     )
     missing = [uid for uid in studies if uid not in manifest["studies"]]
     if missing:
@@ -121,5 +122,6 @@ def run_offline_inference(
         "slots": [list(s) for s in PILOT_SLOTS],
         "runtime": runtime,
         "quarantine": manifest["quarantine"],
+        "series_errors": {uid: meta["series_errors"] for uid, meta in manifest["studies"].items() if meta.get("series_errors")},
         "checkpoint": str(checkpoint),
     }

@@ -72,6 +72,10 @@ def revalidate_audit(run: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(stored, dict):
         return {"overall": "BLOCKED", "reason": "audit_unreadable", "run_id": run.get("run_id")}
     errors: list[str] = []
+    for raw_path, digest in (stored.get("evidence_files") or {}).items():
+        evidence_path = Path(raw_path)
+        if not evidence_path.is_file() or sha256_file(evidence_path) != digest:
+            errors.append(f"audit_evidence_changed:{evidence_path.name}")
     artifacts = run.get("artifacts") or {}
     checkpoint = artifacts.get("checkpoint")
     if stored.get("checkpoint_sha256"):

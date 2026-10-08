@@ -10,6 +10,14 @@ from urllib.parse import urlparse
 import httpx
 
 from rsna_knee.errors import NeedsRuntimeError, QuarantineError
+from rsna_knee.labels.json_select import JsonSelectionError, select_json_message
+
+PROBE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}},
+    "required": ["ok"],
+    "additionalProperties": False,
+}
 
 
 def _assert_local_base(url: str) -> None:
@@ -28,6 +36,33 @@ class ModelInfo:
     raw: dict[str, Any]
 
 
+@dataclass
+class JsonProbe:
+    """Capability probe. mode none means no labels were written."""
+
+    mode: str
+    http_error: str | None = None
+    empty_reason: str | None = None
+    response_field: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "http_error": self.http_error,
+            "empty_reason": self.empty_reason,
+            "response_field": self.response_field,
+        }
+
+
+def http_error_reason(exc: httpx.HTTPError) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        body = (exc.response.text or "").strip().replace("\n", " ")[:500]
+        if body:
+            return f"http_{exc.response.status_code}: {body}"
+        return f"http_{exc.response.status_code}"
+    return f"http_error: {exc}"
+
+
 class LMStudioClient:
     def __init__(
         self,
@@ -42,6 +77,7 @@ class LMStudioClient:
         self.timeout = timeout
         self._client = transport
         self._owned = transport is None
+        self._probe_field: str | None = None
 
     def _http(self) -> httpx.Client:
         if self._client is None:
@@ -116,41 +152,83 @@ class LMStudioClient:
             resp = self._http().post("/chat/completions", json=payload)
             resp.raise_for_status()
         except httpx.HTTPError as exc:
-            raise QuarantineError(f"chat/completions failed: {exc}") from exc
+            raise QuarantineError(http_error_reason(exc)) from exc
         return resp.json()
 
-    def probe_json_schema(self, model: str) -> str:
-        """Return json_schema, json_object, or none. Never fake labels on failure."""
-        tiny_schema = {
-            "type": "object",
-            "properties": {"ok": {"type": "boolean"}},
-            "required": ["ok"],
-            "additionalProperties": False,
-        }
+    def probe_json_schema(
+        self,
+        model: str,
+        *,
+        allow_reasoning_json: bool = False,
+        thinking: str | None = None,
+    ) -> JsonProbe:
+        """Prefer json_schema. Try json_object only when that selection fails."""
+        messages = [{"role": "user", "content": 'Return {"ok": true}'}]
+        schema_http, schema_empty = self._probe_once(
+            model=model,
+            messages=messages,
+            json_schema=PROBE_SCHEMA,
+            allow_reasoning_json=allow_reasoning_json,
+            extra={"thinking": thinking} if thinking else None,
+        )
+        if schema_http is None and schema_empty is None:
+            return JsonProbe(mode="json_schema", response_field=self._probe_field)
+        object_http, object_empty = self._probe_once(
+            model=model,
+            messages=messages,
+            json_object=True,
+            allow_reasoning_json=allow_reasoning_json,
+        )
+        if object_http is None and object_empty is None:
+            return JsonProbe(
+                mode="json_object",
+                http_error=schema_http,
+                empty_reason=schema_empty,
+                response_field=self._probe_field,
+            )
+        return JsonProbe(
+            mode="none",
+            http_error="; ".join(part for part in (schema_http, object_http) if part) or None,
+            empty_reason="; ".join(part for part in (schema_empty, object_empty) if part) or None,
+        )
+
+    def _probe_once(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        allow_reasoning_json: bool,
+        json_schema: dict[str, Any] | None = None,
+        json_object: bool = False,
+        extra: dict[str, Any] | None = None,
+    ) -> tuple[str | None, str | None]:
+        self._probe_field = None
         try:
             out = self.chat_completions(
                 model=model,
-                messages=[{"role": "user", "content": 'Return {"ok": true}'}],
-                json_schema=tiny_schema,
+                messages=messages,
+                json_schema=json_schema,
+                json_object=json_object,
                 max_tokens=256,
                 temperature=0.0,
+                extra=extra,
             )
-            content = out["choices"][0]["message"].get("content") or ""
-            if "ok" in content:
-                return "json_schema"
-        except Exception:
-            pass
+        except QuarantineError as exc:
+            return str(exc), None
         try:
-            out = self.chat_completions(
-                model=model,
-                messages=[{"role": "user", "content": 'Return {"ok": true}'}],
-                json_object=True,
-                max_tokens=256,
-                temperature=0.0,
+            choice = out["choices"][0]
+            message = choice.get("message") or {}
+            finish_reason = choice.get("finish_reason")
+        except (KeyError, IndexError, TypeError, AttributeError):
+            return None, "malformed_response"
+        try:
+            selected = select_json_message(
+                message,
+                PROBE_SCHEMA,
+                allow_reasoning_json=allow_reasoning_json,
+                finish_reason=finish_reason,
             )
-            content = out["choices"][0]["message"].get("content") or ""
-            if "ok" in content:
-                return "json_object"
-        except Exception:
-            pass
-        return "none"
+        except JsonSelectionError as exc:
+            return None, str(exc)
+        self._probe_field = selected.field
+        return None, None

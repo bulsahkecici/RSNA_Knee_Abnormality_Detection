@@ -70,3 +70,56 @@ Cursor agent’ları klasör açılınca kendiliğinden eğitim başlatmaz. VS C
 - Simülatör AUC’sini liderboard sanmayın.
 - CPU’da saatlerce tam eğitim başlatmayın.
 - Cookie kopyalayarak Colab GPU “hack”lemeyin.
+
+## İlk gerçek code submission akışı
+
+Önce gerçek GPU checkpoint'i, sabit fold/etiket/cache hash'leri ve internet kapalı
+Kaggle inference provasını tamamlayın. En az 30 gerçek çalışma üzerinde yeniden
+DICOM decode, eğitim cache'iyle shard hash eşitliği ve decode dahil runtime ölçümü
+`offline_proof.json` içinde bulunmalı. Eksik kanıtlar PASS sayılmaz.
+
+```bash
+rsna audit --run-id pilot-gpu-20261003
+rsna package --run-id pilot-gpu-20261003
+rsna submit --run-id pilot-gpu-20261003 \
+  --kernel bulsahkecici/rsna-knee-first-infer --version 2 \
+  --message "first real DINOv2 pilot" --submit
+rsna submission-status --run-id pilot-gpu-20261003 --watch --interval 30
+```
+
+Audit PASS, teslim edilebilir gerçek bir pilotu ifade eder; yüksek skor veya
+champion kararı değildir. Notebook ve paket sabitlendikten sonra yeniden
+üretilmez. Kaggle CLI receipt yazdırmazsa mevcut submission geçmişinden sayısal
+ID, gönderime özel attempt işaretiyle uzlaştırılır:
+
+```bash
+rsna submit --run-id pilot-gpu-20261003 \
+  --kernel bulsahkecici/rsna-knee-first-infer --version 2 --reconcile
+```
+
+`--reconcile` yeni bir submission göndermez. PENDING durumunda beklenir;
+SCORED yalnız eşleşen gerçek sunucu kaydı COMPLETE ve publicScore sonlu olduğunda
+kaydedilir. Scoring ERROR ise hata incelenip yeni bir notebook sürümü hazırlanır;
+aynı sürüm körlemesine tekrar gönderilmez. Sunucu kaydı ve gerçek skor
+`artifacts/runs/<run_id>/scoring-status.json` içinde saklanır.
+# Sıralı geniş eğitim kampanyası
+
+`rsna labels pilot --limit 100 --live --development-only --run-id RUN_ID
+--progress-file state/label-progress.json` gold çalışmalarını ve gold-eval
+kopya gruplarını etiket geliştirmeden çıkarır. Limit, yeni deneme sayısıdır;
+önbellekteki geçerli kayıtlar yeniden LLM çağrısı yapmadan çıktıya eklenir.
+En az 10 denemede karantina oranı %20'yi aşarsa işlem durur.
+Bu kontrol etiketlerin klinik doğruluğunu garanti etmez.
+
+`rsna campaign --run-id campaign-YYYYMMDD-vN --owner KAGGLE_OWNER` yerel
+etiket kontrolünü ve genişletmeyi, ardından özel Kaggle önbellek ve iki GPU
+eğitimini sıralı çalıştırır. Bu komut uzak yükleme yapar. 2026-10-03 v2
+kampanyası için kullanıcı açık onay verdi; denetleyici mevcut yerel işi bekliyor.
+`--pilot-run-id` ve `--labels-run-id` ile mevcut işler devralınabilir; tamamlanan
+registry kaydı, etiket dosyası hash'i ve kanıt kontrolü geçmeden ilerlemez.
+
+Durum: `state/campaigns/RUN_ID/status.json`. Girdi kimliği değişirse yeni
+run_id gerekir. Belirsiz push sonucu otomatik tekrar gönderilmez.
+Kaynak paketine ham rapor, train.csv, SQLite veya kimlik doğrulama dosyası
+girmez. MRI verileri Kaggle'ın mevcut yarışma girdisinden okunur.
+Eğitim sonuçları inceleme aşamasında durur; otomatik yarışma gönderimi yapmaz.

@@ -208,6 +208,7 @@ def build_cache(
     n_centers: int = 3,
     layout: str = "study/series",
     resume: bool = True,
+    strict_series: bool = True,
 ) -> dict[str, Any]:
     """Decode only studies that exist under dicom_root. Never downloads the archive."""
     grouped = _read_series_csv(series_csv)
@@ -218,7 +219,7 @@ def build_cache(
     index = CacheIndex(dest)
     studies: dict[str, Any] = {}
     quarantine: dict[str, Any] = {}
-    source_hashes = {"series_csv": sha256_file(series_csv), "dicom_root": str(dicom_root.resolve())}
+    source_hashes = {"series_csv": sha256_file(series_csv), "dicom_root": str(dicom_root.resolve()), "strict_series": str(strict_series)}
     slot_names = [list(slot) for slot in PILOT_SLOTS]
     pp_hash = preprocess_hash({"size": size, "n_centers": n_centers, "slots": PILOT_SLOTS})
     expected_shape = [len(PILOT_SLOTS), n_centers, 3, size, size]
@@ -258,16 +259,26 @@ def build_cache(
         slot_mask: list[float] = []
         order_mode = "none"
         fatal: dict[str, str] | None = None
+        series_errors: list[dict[str, str]] = []
         for slot in selected:
             if slot is None:
                 slot_arrays.append(None)
                 slot_mask.append(0.0)
                 continue
             series_dir = study_dir / slot[SERIES_ID_COL]
-            pairs, err = _load_slices(series_dir)
+            try:
+                pairs, err = _load_slices(series_dir)
+            except Exception as exc:  # noqa: BLE001
+                pairs, err = [], f"dicom_read:{exc.__class__.__name__}"
             if err and (err.startswith("codec") or err.startswith("dicom_read")):
-                fatal = {"reason": err, "series": slot[SERIES_ID_COL]}
-                break
+                failure = {"reason": err, "series": slot[SERIES_ID_COL]}
+                if strict_series:
+                    fatal = failure
+                    break
+                series_errors.append(failure)
+                slot_arrays.append(None)
+                slot_mask.append(0.0)
+                continue
             if err or not pairs:
                 slot_arrays.append(None)
                 slot_mask.append(0.0)
@@ -275,8 +286,14 @@ def build_cache(
             try:
                 centers, order_mode = series_to_centers(pairs, size=size, n_centers=n_centers)
             except Exception as exc:  # noqa: BLE001
-                fatal = {"reason": f"geometry:{exc.__class__.__name__}", "series": slot[SERIES_ID_COL]}
-                break
+                failure = {"reason": f"geometry:{exc.__class__.__name__}", "series": slot[SERIES_ID_COL]}
+                if strict_series:
+                    fatal = failure
+                    break
+                series_errors.append(failure)
+                slot_arrays.append(None)
+                slot_mask.append(0.0)
+                continue
             slot_arrays.append(centers)
             slot_mask.append(1.0)
         if fatal:
@@ -305,6 +322,8 @@ def build_cache(
             "n_centers": n_centers,
             "synthetic": False,
         }
+        if series_errors:
+            meta["series_errors"] = series_errors
         path = write_shard(uid, volume, meta, root=dest, dtype="uint8")
         meta["sha256"] = sha256_file(path)
         studies[uid] = meta

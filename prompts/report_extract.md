@@ -18,5 +18,6 @@ Rules:
 - criterion_positive: the report asserts a finding that would meet host positive criteria (high-grade ACL/MCL, surface-reaching meniscal tear not mere degeneration, moderate/large OA/effusion/Baker, impact contusion without fracture line, acute fracture).
 - Do not invent anatomy the report does not name.
 - Evidence must be a verbatim substring of the report.
+- Copy one contiguous source span. Preserve spaces and line breaks (encode line breaks as \n in JSON); do not join sentences, translate, paraphrase, or insert ellipses. Prefer a short span that still contains the finding, its negation or uncertainty, and any severity needed for the criterion.
 
 Return JSON only matching the provided schema. All 12 target keys are required.

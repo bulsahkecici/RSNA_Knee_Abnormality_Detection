@@ -12,8 +12,10 @@ from typing import Any
 from filelock import FileLock
 
 from rsna_knee.hashing import sha256_json, sha256_text
+from rsna_knee.labels.evidence import EVIDENCE_POLICY_VERSION, recover_source_spans
+from rsna_knee.labels.json_select import select_json_message
 from rsna_knee.labels.lmstudio import LMStudioClient
-from rsna_knee.labels.validate import load_schema, parse_json_content, validate_extraction
+from rsna_knee.labels.validate import load_schema, validate_extraction
 from rsna_knee.ontology import ONTOLOGY_VERSION, TARGET_COLUMNS
 from rsna_knee.paths import LABELS_DIR, PROMPT_DIR, SCHEMA_DIR, ensure_runtime_dirs
 
@@ -29,6 +31,7 @@ CREATE TABLE IF NOT EXISTS extractions (
   payload_json TEXT NOT NULL,
   status TEXT NOT NULL,
   errors_json TEXT NOT NULL,
+  provenance_json TEXT NOT NULL DEFAULT '{}',
   created_ts REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS quarantine (
@@ -56,6 +59,7 @@ def resume_key(uid: str, report: str, model_id: str, model_revision: str, p_hash
             "revision": model_revision,
             "prompt_hash": p_hash,
             "ontology": ontology,
+            "evidence_policy": EVIDENCE_POLICY_VERSION,
         }
     )
 
@@ -69,17 +73,20 @@ class LabelStore:
         self.conn.row_factory = sqlite3.Row
         with self.conn:
             self.conn.executescript(CACHE_SQL)
+            columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(extractions)")}
+            if "provenance_json" not in columns:
+                self.conn.execute("ALTER TABLE extractions ADD COLUMN provenance_json TEXT NOT NULL DEFAULT '{}'")
 
     def get(self, key: str) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT * FROM extractions WHERE resume_key=?", (key,)).fetchone()
         return dict(row) if row else None
 
-    def put(self, key: str, uid: str, report_hash: str, model_id: str, model_revision: str, p_hash: str, payload: dict[str, Any], status: str, errors: list[str]) -> None:
+    def put(self, key: str, uid: str, report_hash: str, model_id: str, model_revision: str, p_hash: str, payload: dict[str, Any], status: str, errors: list[str], provenance: dict[str, Any] | None = None) -> None:
         with self.conn:
             self.conn.execute(
                 """INSERT OR REPLACE INTO extractions
-                   (resume_key, uid, report_hash, model_id, model_revision, prompt_hash, ontology_version, payload_json, status, errors_json, created_ts)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                   (resume_key, uid, report_hash, model_id, model_revision, prompt_hash, ontology_version, payload_json, status, errors_json, created_ts, provenance_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     key,
                     uid,
@@ -92,6 +99,7 @@ class LabelStore:
                     status,
                     json.dumps(errors),
                     time.time(),
+                    json.dumps(provenance or {}, ensure_ascii=False),
                 ),
             )
 
@@ -165,6 +173,7 @@ def extract_one(
     output_tokens: int = 2048,
     thinking: str = "off",
     use_cache: bool = True,
+    allow_reasoning_json: bool = False,
 ) -> dict[str, Any]:
     rng = rng or random.Random()
     system = (PROMPT_DIR / "report_extract.md").read_text(encoding="utf-8")
@@ -174,7 +183,7 @@ def extract_one(
     cached = store.get(key) if use_cache else None
     if cached and cached["status"] == "ok":
         payload = json.loads(cached["payload_json"])
-        return {"status": "ok", "cached": True, "payload": payload, "resume_key": key}
+        return {"status": "ok", "cached": True, "payload": payload, "resume_key": key, "provenance": json.loads(cached.get("provenance_json") or "{}")}
 
     max_chars = max(512, context_tokens - output_tokens - 256) * 4
     chunks = split_report(report, max_chars)
@@ -186,61 +195,71 @@ def extract_one(
     schema_for_api = json.loads((SCHEMA_DIR / "report_labels.json").read_text(encoding="utf-8"))
     last_err = "unknown"
     raw = None
-    modes = ["json_schema", "json_object"] if json_mode == "json_schema" else [json_mode]
+    used_mode = json_mode if json_mode in {"json_schema", "json_object"} else None
+    provenance: dict[str, Any] | None = None
     lock = FileLock(str(store.path) + ".llm.lock", timeout=3600)
     with lock:
         for attempt in range(max_retries + 1):
             try:
+                if used_mode is None:
+                    raise ValueError("json_mode_unsupported")
                 payloads: list[dict[str, Any]] = []
-                used_mode = None
+                fields: list[str] = []
+                finishes: list[str | None] = []
                 for chunk in chunks:
-                    resp = None
-                    chunk_err = "json_mode_unsupported"
-                    for mode in modes:
-                        if mode == "json_schema":
-                            resp = client.chat_completions(
-                                model=model_id,
-                                messages=_messages(chunk, uid, system),
-                                json_schema=schema_for_api,
-                                temperature=temperature,
-                                max_tokens=output_tokens,
-                                extra={"thinking": thinking} if thinking else None,
-                            )
-                        elif mode == "json_object":
-                            resp = client.chat_completions(
-                                model=model_id,
-                                messages=_messages(chunk, uid, system),
-                                json_object=True,
-                                temperature=temperature,
-                                max_tokens=output_tokens,
-                            )
-                        else:
-                            chunk_err = "json_mode_unsupported"
-                            resp = None
-                            continue
-                        used_mode = mode
-                        raw = resp["choices"][0]["message"].get("content") or ""
-                        try:
-                            payloads.append(parse_json_content(raw))
-                            chunk_err = ""
-                            break
-                        except ValueError as exc:
-                            chunk_err = str(exc)
-                            resp = None
-                    if chunk_err:
-                        raise ValueError(chunk_err)
+                    if used_mode == "json_schema":
+                        resp = client.chat_completions(
+                            model=model_id,
+                            messages=_messages(chunk, uid, system),
+                            json_schema=schema_for_api,
+                            temperature=temperature,
+                            max_tokens=output_tokens,
+                            extra={"thinking": thinking} if thinking else None,
+                        )
+                    else:
+                        resp = client.chat_completions(
+                            model=model_id,
+                            messages=_messages(chunk, uid, system),
+                            json_object=True,
+                            temperature=temperature,
+                            max_tokens=output_tokens,
+                        )
+                    choice = resp["choices"][0]
+                    selected = select_json_message(
+                        choice.get("message") or {},
+                        schema_for_api,
+                        allow_reasoning_json=allow_reasoning_json,
+                        finish_reason=choice.get("finish_reason"),
+                    )
+                    payloads.append(selected.data)
+                    fields.append(selected.field)
+                    finishes.append(choice.get("finish_reason"))
+                    raw = selected.raw
+                response_field: str | list[str] = fields[0] if len(set(fields)) == 1 else fields
+                provenance = {
+                    "response_field": response_field,
+                    "json_mode": used_mode,
+                    "finish_reason": finishes[-1] if finishes else None,
+                }
                 payload = payloads[0] if len(payloads) == 1 else _merge_payloads(uid, payloads)
                 if not payload.get("StudyInstanceUID"):
                     payload["StudyInstanceUID"] = uid
+                payload, repaired = recover_source_spans(payload, report)
+                provenance["evidence_policy"] = EVIDENCE_POLICY_VERSION
+                provenance["recovered_source_spans"] = repaired
+                if repaired:
+                    # Preserve original evidence locally, never in remote training labels.
+                    provenance["raw_response"] = raw
                 errors = validate_extraction(payload, report, schema, expected_uid=uid)
                 if not errors:
-                    store.put(key, uid, sha256_text(report), model_id, revision or None, p_hash, payload, "ok", [])
+                    store.put(key, uid, sha256_text(report), model_id, revision or None, p_hash, payload, "ok", [], provenance=provenance)
                     return {
                         "status": "ok",
                         "cached": False,
                         "payload": payload,
                         "resume_key": key,
                         "json_mode": used_mode,
+                        "provenance": provenance,
                         "revision_source": "lmstudio_model_record",
                     }
                 last_err = ";".join(errors)
@@ -248,8 +267,11 @@ def extract_one(
                 last_err = str(exc)
             time.sleep((0.25 * (2**attempt)) * (0.5 + rng.random()))
     store.quarantine(uid, key, last_err, raw)
-    store.put(key, uid, sha256_text(report), model_id, revision or None, p_hash, {}, "quarantine", [last_err])
-    return {"status": "quarantine", "reason": last_err, "resume_key": key}
+    store.put(key, uid, sha256_text(report), model_id, revision or None, p_hash, {}, "quarantine", [last_err], provenance=provenance)
+    rejected: dict[str, Any] = {"status": "quarantine", "reason": last_err, "resume_key": key}
+    if provenance is not None:
+        rejected["provenance"] = provenance
+    return rejected
 
 
 def write_parquet(rows: list[dict[str, Any]], path: Path) -> Path:

@@ -50,10 +50,55 @@ def _print(obj: object) -> None:
     console.print_json(json.dumps(obj, default=str))
 
 
+def _artifact_json(state: PipelineState, key: str) -> object:
+    raw = state.artifacts.get(key)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+def _print_labels(state: PipelineState, live: bool) -> None:
+    probe = _artifact_json(state, "json_probe")
+    probe_dict = probe if isinstance(probe, dict) else {}
+    _print(
+        {
+            "run_id": state.run_id,
+            "stage": str(state.stage),
+            "labels": state.artifacts.get("labels"),
+            "live": live,
+            "reason": state.blocked_reason,
+            "next": state.next_action_tr,
+            "http_error": probe_dict.get("http_error"),
+            "empty_reason": probe_dict.get("empty_reason"),
+            "json_probe": probe,
+            "label_errors": _artifact_json(state, "label_errors"),
+            "response_fields": _artifact_json(state, "response_fields"),
+            "label_counts": _artifact_json(state, "label_counts"),
+            "label_selection": state.artifacts.get("label_selection"),
+        }
+    )
+
+
 @app.command("doctor")
 def doctor_cmd() -> None:
     """Measure the real machine and provider capabilities."""
     _print(run_doctor())
+
+
+@app.command("campaign")
+def campaign_cmd(
+    run_id: str = typer.Option(..., "--run-id"),
+    owner: str = typer.Option(..., "--owner"),
+    pilot_run_id: str | None = typer.Option(None, "--pilot-run-id"),
+    labels_run_id: str | None = typer.Option(None, "--labels-run-id"),
+) -> None:
+    """Run local label gates, a private remote cache, and two GPU controls."""
+    from rsna_knee.runtime.campaign_controller import run_campaign
+
+    _print(run_campaign(run_id, owner, pilot_run_id=pilot_run_id, labels_run_id=labels_run_id))
 
 
 @metadata_app.command("fetch")
@@ -79,13 +124,27 @@ def labels_pilot(
     live: bool = typer.Option(False, "--live"),
     resume: bool = typer.Option(True, "--resume/--no-resume"),
     run_id: str | None = typer.Option(None, "--run-id"),
+    development_only: bool = typer.Option(False, "--development-only"),
+    progress_file: Path | None = typer.Option(None, "--progress-file"),
 ) -> None:
     ensure_runtime_dirs()
     registry = Registry()
     state = new_state("pilot", synthetic=not live, run_id=run_id)
-    state = stage_labels(state, registry, limit=limit, live=live, resume=resume)
+    def report_progress(counts: dict) -> None:
+        console.print(json.dumps({"label_progress": counts}))
+        if progress_file:
+            progress_file.parent.mkdir(parents=True, exist_ok=True)
+            temp = progress_file.with_suffix(".tmp")
+            temp.write_text(json.dumps({"run_id": state.run_id, "updated_ts": time.time(), **counts}))
+            temp.replace(progress_file)
+
+    state = stage_labels(
+        state, registry, limit=limit, live=live, resume=resume,
+        development_only=development_only,
+        progress=report_progress,
+    )
     registry.upsert_run(state.run_id, state.profile, state.stage, state.model_dump(), state.synthetic)
-    _print({"run_id": state.run_id, "stage": str(state.stage), "labels": state.artifacts.get("labels"), "live": live})
+    _print_labels(state, live)
 
 
 @labels_app.command("run")
@@ -93,8 +152,10 @@ def labels_run(
     resume: bool = typer.Option(True, "--resume/--no-resume"),
     live: bool = typer.Option(False, "--live"),
     run_id: str | None = typer.Option(None, "--run-id"),
+    development_only: bool = typer.Option(False, "--development-only"),
+    progress_file: Path | None = typer.Option(None, "--progress-file"),
 ) -> None:
-    labels_pilot(limit=10**9, live=live, resume=resume, run_id=run_id)
+    labels_pilot(limit=10**9, live=live, resume=resume, run_id=run_id, development_only=development_only, progress_file=progress_file)
 
 
 @cache_app.command("pilot")
@@ -266,7 +327,23 @@ def evaluate_cmd(run_id: str = typer.Option(..., "--run-id")) -> None:
 def audit_cmd(run_id: str = typer.Option(..., "--run-id")) -> None:
     from rsna_knee.agents.auditor import revalidate_audit
 
-    run = Registry().get_run(run_id) or Registry(roots_for(True).registry).get_run(run_id) or {}
+    registry = Registry()
+    run = registry.get_run(run_id) or Registry(roots_for(True).registry).get_run(run_id) or {}
+    if not run.get("synthetic") and (run.get("artifacts") or {}).get("offline_proof"):
+        from rsna_knee.pipeline import stage_audit
+
+        previous_stage = PipelineState.model_validate(run).stage
+        state = stage_audit(PipelineState.model_validate(run), registry)
+        result = json.loads(Path(state.artifacts["audit"]).read_text())
+        if result.get("overall") == "PASS":
+            state.stage = previous_stage if previous_stage in {Stage.SUBMITTED, Stage.SCORED} else Stage.READY_TO_SUBMIT
+            state.artifacts["kernel"] = result["kernel"]
+            state.artifacts["kernel_version"] = str(result["version"])
+            package = Path(state.artifacts["package"])
+            package.joinpath("FROZEN").write_text(result["package_sha256"])
+        registry.upsert_run(state.run_id, state.profile, state.stage, state.model_dump(), False)
+        _print(result)
+        return
     _print(revalidate_audit(run))
 
 
@@ -304,8 +381,9 @@ def submit_cmd(
     version: str = typer.Option(..., "--version"),
     message: str = typer.Option("rsna-knee", "--message"),
     execute: bool = typer.Option(False, "--submit"),
+    reconcile: bool = typer.Option(False, "--reconcile"),
 ) -> None:
-    _print(submit_run(run_id, kernel, version, message, execute=execute))
+    _print(submit_run(run_id, kernel, version, message, execute=execute, reconcile=reconcile))
 
 
 @pipeline_app.command("run")
@@ -326,6 +404,22 @@ def pipeline_run(
             "synthetic": state.synthetic,
         }
     )
+
+
+@app.command("submission-status")
+def submission_status_cmd(
+    run_id: str = typer.Option(..., "--run-id"),
+    watch: bool = typer.Option(False, "--watch"),
+    interval: float = typer.Option(30.0, "--interval", min=5.0, max=60.0),
+) -> None:
+    from rsna_knee.submission.status import poll_score
+
+    while True:
+        result = poll_score(run_id)
+        _print({key: result.get(key) for key in ("run_id", "status", "server_receipt", "public_score", "reason")})
+        if not watch or result.get("status") != "PENDING":
+            return
+        time.sleep(interval)
 
 
 @pipeline_app.command("pause")

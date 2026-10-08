@@ -6,7 +6,15 @@ from rsna_knee.labels.extract import LabelStore, extract_one
 from rsna_knee.labels.lmstudio import LMStudioClient
 
 
-def run_labeler(client: LMStudioClient, rows: list[dict], model_id: str, model_revision: str, store: LabelStore, json_mode: str = "json_schema"):
+def run_labeler(
+    client: LMStudioClient,
+    rows: list[dict],
+    model_id: str,
+    model_revision: str,
+    store: LabelStore,
+    json_mode: str = "json_schema",
+    allow_reasoning_json: bool = False,
+):
     out = []
     for row in rows:
         out.append(
@@ -18,6 +26,7 @@ def run_labeler(client: LMStudioClient, rows: list[dict], model_id: str, model_r
                 model_revision=model_revision,
                 store=store,
                 json_mode=json_mode,
+                allow_reasoning_json=allow_reasoning_json,
             )
         )
     return out
