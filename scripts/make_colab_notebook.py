@@ -189,6 +189,7 @@ def generate(config_path: Path, *, cache_kernel: str, cache_manifest_sha256: str
     if errors:
         raise SystemExit(f"{exp_id} fails experiment validation: {errors}")
     train = job_train_spec(spec)
+    train["resume"] = True  # checkpoint lives on Drive, so Run All after a disconnect resumes; not run identity
     soft = b""
     if train.get("label_source", "hard_masked") != "hard_masked":
         soft_path = ROOT / spec["labels"]["file"]
