@@ -10,6 +10,11 @@ import time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 
+def bundle_files(asset):
+ return {str(p.relative_to(asset)):hashlib.sha256(p.read_bytes()).hexdigest()
+         for p in asset.rglob('*') if p.is_file() and p.name!='MANIFEST.json'
+         and not any(part.startswith('.') or part=='__pycache__' for part in p.relative_to(asset).parts)}
+
 def wait_submission_slot(call,on_wait):
  """Wait using read-only limit checks; keep the candidate pending."""
  while True:
@@ -65,7 +70,7 @@ def publish(item,folder,call,write,notify):
  cache_metadata=ROOT/item['preprocess_config'] if item.get('preprocess_config') else ROOT/'artifacts/kaggle/inspect-v3-cache/output/preprocess-config.json'
  shutil.copyfile(cache_metadata,asset/'assets/preprocess-config.json')
  shutil.copyfile(checkpoint,asset/'assets/checkpoint.pt');shutil.copytree(ROOT/'artifacts/kaggle/v3-offline-asset/wheels',asset/'wheels',dirs_exist_ok=True)
- files={str(p.relative_to(asset)):hashlib.sha256(p.read_bytes()).hexdigest() for p in asset.rglob('*') if p.is_file() and '__pycache__' not in p.parts and p.name!='MANIFEST.json'}
+ files=bundle_files(asset)
  (asset/'MANIFEST.json').write_text(json.dumps({'internet_required':False,'files':files},indent=2))
  upload=folder/(tag+'-upload');upload.mkdir(exist_ok=True)
  with tarfile.open(upload/'offline-bundle.tar.gz','w:gz') as tar:
@@ -99,5 +104,5 @@ def publish(item,folder,call,write,notify):
  state['limits']=wait_submission_slot(call,pending)
  state['submission_description']='Reviewed autonomous v3 candidate '+tag+' ['+str(time.time_ns())+']'
  save('SUBMIT_UNKNOWN')
- state['receipt']=call(['competitions','submit','rsna-knee-abnormality-detection','-k',kernel,'-v','1','-f','submission.csv','-m',state['submission_description']]);save('SUBMITTED');notify('Yeni aday Kaggle yarışmasına gönderildi: '+tag)
+ state['receipt']=call(['competitions','submit','rsna-knee-abnormality-detection','-k',kernel,'-v',str(state.get('kernel_version',1)),'-f','submission.csv','-m',state['submission_description']]);save('SUBMITTED');notify('Yeni aday Kaggle yarışmasına gönderildi: '+tag)
  return track_submission(state,statepath,call,write,notify)

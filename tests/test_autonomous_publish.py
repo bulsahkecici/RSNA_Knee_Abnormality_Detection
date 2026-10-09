@@ -13,6 +13,17 @@ def load_module(name):
     return module
 
 
+def test_bundle_excludes_mac_metadata_and_hidden_paths(tmp_path):
+    module=load_module('candidate_publish')
+    (tmp_path/'src').mkdir()
+    (tmp_path/'src/model.py').write_text('real source')
+    (tmp_path/'src/.DS_Store').write_bytes(b'mac metadata')
+    (tmp_path/'.hidden').mkdir()
+    (tmp_path/'.hidden/file').write_text('hidden')
+    (tmp_path/'MANIFEST.json').write_text('{}')
+    assert set(module.bundle_files(tmp_path))=={'src/model.py'}
+
+
 @pytest.mark.parametrize('phase',['SUBMIT_UNKNOWN','ASSET_PUSH_UNKNOWN','KERNEL_PUSH_UNKNOWN'])
 def test_publication_requires_reconciliation_before_external_mutation(tmp_path,phase):
     module=load_module('candidate_publish')
