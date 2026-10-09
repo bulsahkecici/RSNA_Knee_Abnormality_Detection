@@ -88,3 +88,4 @@ logs/
 /notebooks/07_colab_sixcenter_label_attention.ipynb
 /artifacts/research/
 /notebooks/08_recover_colab_attention_evaluation.ipynb
+/notebooks/generated/
