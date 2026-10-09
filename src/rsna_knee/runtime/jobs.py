@@ -114,6 +114,8 @@ def build_job(
     resolved = {key: _resource(path, input_root) for key, path in (resources or {}).items()}
     checkpoint_name = _checkpoint_name(checkpoint_out)
     train_spec = dict(train or {})
+    # The job-level encoder must agree with the trained family; the worker refuses a mismatch.
+    encoder = "tiny_test_encoder" if synthetic else str(train_spec.get("encoder") or "dinov2_vits14")
     manifest = {
         "run_id": run_id,
         "stage": stage,
@@ -123,7 +125,7 @@ def build_job(
         "train": train_spec,
         "train_uids": train_uids,
         "checkpoint_out": checkpoint_name,
-        "encoder": "tiny_test_encoder" if synthetic else "dinov2_vits14",
+        "encoder": encoder,
     }
     man_path = dest / "input_manifest.json"
     man_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -151,7 +153,7 @@ def build_job(
         "lease_id": new_lease_id(),
         "fencing_token": token,
         "synthetic": synthetic,
-        "encoder": "tiny_test_encoder" if synthetic else "dinov2_vits14",
+        "encoder": encoder,
     }
     refresh_spec(job)
     job_path = dest / "job.json"

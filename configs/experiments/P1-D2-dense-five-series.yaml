@@ -1,0 +1,43 @@
+# P1 / D2. Prepared, not run.
+experiment_id: D2
+phase: P1
+priority: 1
+status: prepared
+queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
+hypothesis: Two additional structural series improve dense model
+question: Do sagittal and coronal structural series (5 slots) add signal over D1's three fluid series?
+control: D1
+changes: [cache]
+folds: state/folds-v2-allgold.csv
+labels: {source: hard_masked, file: numeric labels jsonl, sha256: recorded_at_job_build}
+cache:
+  name: v4-dense-five-series
+  storage: npz
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid, Sagittal:structural, Coronal:structural]
+  centers: 12
+  img_size: 224
+  preprocess_hash: from_manifest
+weights: {encoder: dinov2_vits14, file: dinov2_vits14_pretrain.pth, sha256: configs/dinov2_vits14_allowlist.json}
+train:
+  profile: campaign
+  encoder: dinov2_vits14
+  init: official_pretrained
+  label_source: hard_masked
+  pooling: mean
+  unfreeze_blocks: 2
+  unfreeze_after_epochs: 1
+  layer_decay: null
+  train_centers_per_slot: 6
+  img_size: 224
+  epochs: 8
+  effective_batch: 8
+  microbatch: 1
+  seed: 2026
+  lr_head: 0.0001
+  lr_backbone: 0.00001
+evaluation: {windows: all_centers, tta: null, splits: [gold, weak], targets: fixed hard masked labels}
+measure: [gold_macro_auc, weak_macro_auc, per_class_auc, epoch_wall_seconds, seconds_per_train_study,
+          peak_cuda_memory_bytes, evaluation_seconds, skipped_updates]
+note: Absent structural series are masked slots (slot_mask 0), never zero-image evidence. 5/3 the encoder cost of D1.
+max_full_runs: 1
+decision_criterion: Paired gold bootstrap delta vs D1 with uncertainty; series-selection audit must pass first.

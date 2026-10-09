@@ -40,6 +40,9 @@ def torch_masked_bce_parts(logits, targets, mask, weight=None):
     t = torch.nan_to_num(targets, nan=0.0)
     if torch.any(t == -1):
         raise ValueError("sentinel -1 passed as BCE target; mask it first")
+    # Soft targets are probabilities; hard targets are their {0,1} special case.
+    if torch.any(((t < 0) | (t > 1)) & (mask > 0)):
+        raise ValueError("BCE targets must lie in [0, 1]")
     loss = F.binary_cross_entropy_with_logits(logits, t, reduction="none")
     w = mask
     if weight is not None:

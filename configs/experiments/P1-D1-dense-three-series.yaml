@@ -1,0 +1,46 @@
+# P1 / D1. Prepared, not run.
+experiment_id: D1
+phase: P1
+priority: 1
+status: prepared
+queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
+hypothesis: Denser three-series image coverage improves learning
+question: >
+  Does a dense 12-center cache of the same three series, with 6 random windows per
+  slot per training step (same encoder cost per step as D0) and all 12 at evaluation,
+  improve gold/weak AUC over D0?
+control: D0
+changes: [cache, train.train_centers_per_slot]
+folds: state/folds-v2-allgold.csv
+labels: {source: hard_masked, file: numeric labels jsonl, sha256: recorded_at_job_build}
+cache:
+  name: v4-dense-three-series
+  storage: npz
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid]
+  centers: 12
+  img_size: 224
+  preprocess_hash: from_manifest
+weights: {encoder: dinov2_vits14, file: dinov2_vits14_pretrain.pth, sha256: configs/dinov2_vits14_allowlist.json}
+train:
+  profile: campaign
+  encoder: dinov2_vits14
+  init: official_pretrained
+  label_source: hard_masked
+  pooling: mean
+  unfreeze_blocks: 2
+  unfreeze_after_epochs: 1
+  layer_decay: null
+  train_centers_per_slot: 6
+  img_size: 224
+  epochs: 8
+  effective_batch: 8
+  microbatch: 1
+  seed: 2026
+  lr_head: 0.0001
+  lr_backbone: 0.00001
+evaluation: {windows: all_centers, tta: null, splits: [gold, weak], targets: fixed hard masked labels}
+measure: [gold_macro_auc, weak_macro_auc, per_class_auc, epoch_wall_seconds, seconds_per_train_study,
+          peak_cuda_memory_bytes, evaluation_seconds, skipped_updates]
+note: Evaluation encodes 2x the windows of D0; inference runtime must be re-measured.
+max_full_runs: 1
+decision_criterion: Paired gold bootstrap delta vs D0 with uncertainty; weak delta must agree in sign.

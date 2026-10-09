@@ -12,14 +12,16 @@ import torch
 
 from rsna_knee.gates import assert_real_encoder
 from rsna_knee.hashing import sha256_file, sha256_json
-from rsna_knee.models.dinov2 import load_dinov2_vits14
+from rsna_knee.models.dinov2 import ENCODER_NAME, load_dinov2_vits14
+from rsna_knee.models.families import FAMILIES, get_family, load_encoder, weight_trust_for
 from rsna_knee.models.study import StudyModel
 from rsna_knee.models.weights import weight_trust
 from rsna_knee.runtime.budget import execution_allowed
 from rsna_knee.runtime.jobs import resolve_checkpoint_out, validate_job
 from rsna_knee.runtime.train_payload import heldout_batches, prepare_training
 from rsna_knee.runtime.transport import FileTransport
-from rsna_knee.training.loop import train_study_model
+from rsna_knee.training.checkpoint import torch_load
+from rsna_knee.training.loop import planned_updates, train_study_model
 from rsna_knee.training.train import train_tiny
 from rsna_knee.workflow.state import SCHEMA_VERSION, ResultMetrics, ResultRecord
 
@@ -65,7 +67,33 @@ def accept_job(job: dict[str, Any], expected_token: str | None) -> dict[str, Any
     return job
 
 
+def assert_production_encoder(name: str | None) -> None:
+    """DINOv2 keeps the submission gate; other registered real families may train.
+
+    Tiny test configs of a registered family are refused later by StudyModel's guard.
+    """
+    if name in FAMILIES and name != ENCODER_NAME:
+        return
+    assert_real_encoder(name)
+
+
+def _unfreeze_after_steps(train_cfg: dict[str, Any], n_studies: int) -> int | None:
+    if train_cfg.get("unfreeze_after_steps") is not None:
+        return int(train_cfg["unfreeze_after_steps"])
+    epochs = train_cfg.get("unfreeze_after_epochs")
+    if epochs is None:
+        return None
+    if int(epochs) == 0:
+        return 0
+    return planned_updates(n_studies, int(epochs), int(train_cfg.get("effective_batch", 1)))
+
+
 def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str, Any], list[str]]:
+    train_cfg = dict(job.get("train") or {})
+    family = str(train_cfg.get("encoder") or ENCODER_NAME)
+    if job.get("encoder") not in {None, family}:
+        return "rejected_encoder", {"kind": "unavailable", "macro_auc": None,
+                                    "notes": f"job encoder {job.get('encoder')} != train encoder {family}"}, []
     payload, reason = prepare_training(job, job_dir)
     if payload is None:
         if reason == "no_items":
@@ -73,19 +101,26 @@ def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str,
         if reason and reason.startswith("leakage"):
             return "leakage", {"kind": "unavailable", "macro_auc": None, "notes": reason}, []
         return reason or "no_items", {"kind": "unavailable", "macro_auc": None, "notes": reason or "inputs missing"}, []
-    trust = weight_trust(payload["weights"])
+    tta = train_cfg.get("tta")
+    if tta not in {None, "anatomical"}:
+        return "invalid_tta", {"kind": "unavailable", "macro_auc": None, "notes": f"unsupported tta {tta}"}, []
+    if tta and not payload.get("slot_planes"):
+        return "tta_planes_unknown", {"kind": "unavailable", "macro_auc": None,
+                                      "notes": "cache manifest does not name slot planes"}, []
+    spec = get_family(family)
+    model_img_size = int(payload.get("model_img_size") or payload["img_size"])
+    trust = weight_trust(payload["weights"]) if family == ENCODER_NAME else weight_trust_for(family, payload["weights"])
     if not trust["allowlisted"] and not trust["official"]:
         return (
             "unverified_weights",
             {
                 "kind": "unavailable",
                 "macro_auc": None,
-                "notes": "random or unverified weights are not pretrained DINOv2",
+                "notes": f"random or unverified weights are not pretrained {spec.display}",
                 "weights_sha256": trust["sha256"],
             },
             [],
         )
-    train_cfg = dict(job.get("train") or {})
     allowed, budget_reason = execution_allowed(
         profile=str(train_cfg.get("profile") or "pilot"),
         n_studies=len(payload["train_uids"]),
@@ -101,12 +136,25 @@ def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str,
         supervised += float(batch["y_mask"].sum())
     if supervised <= 0:
         return "no_supervision", {"kind": "unavailable", "macro_auc": None, "notes": "mask and weight sum is zero", "supervised_targets": 0}, []
-    encoder = load_dinov2_vits14(payload["weights"], img_size=payload["img_size"])
-    if encoder.provenance.get("pretrained") and not trust["official"]:
+    if family == ENCODER_NAME:
+        encoder = load_dinov2_vits14(payload["weights"], img_size=model_img_size)
+    else:
+        encoder = load_encoder(family, payload["weights"], img_size=model_img_size, expected_sha256=trust["sha256"])
+    # timm families never claim an official hash: their trust is the local allowlist plus the job sha256.
+    if family == ENCODER_NAME and encoder.provenance.get("pretrained") and not trust["official"]:
         return "unverified_weights", {"kind": "unavailable", "macro_auc": None, "notes": "pretrained flag without official hash"}, []
     out_path = resolve_checkpoint_out(job, job_dir)
     before = sha256_file(out_path) if out_path.is_file() else None
-    model = StudyModel(encoder, freeze_encoder=True, pooling=train_cfg.get("pooling", "mean"))
+    model = StudyModel(encoder, freeze_encoder=True, pooling=payload.get("pooling") or train_cfg.get("pooling", "mean"),
+                       input_size_from=int(payload["img_size"]),
+                       aggregator_layers=int(train_cfg.get("aggregator_layers", 2)),
+                       aggregator_heads=int(train_cfg.get("aggregator_heads", 4)))
+    resuming = bool(train_cfg.get("resume")) and out_path.is_file()
+    if payload.get("init_checkpoint") is not None and not resuming:
+        try:
+            model.initialize_from_checkpoint(torch_load(payload["init_checkpoint"], map_location="cpu"))
+        except (KeyError, RuntimeError, ValueError) as exc:
+            return "init_checkpoint_invalid", {"kind": "unavailable", "macro_auc": None, "notes": str(exc)}, []
     trained = train_study_model(
         model,
         payload["batches"],
@@ -116,13 +164,17 @@ def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str,
         effective_batch=int(train_cfg.get("effective_batch", 1)),
         microbatch=int(train_cfg.get("microbatch", 1)),
         seed=int(train_cfg.get("seed", 0)),
-        unfreeze_after_steps=train_cfg.get("unfreeze_after_steps"),
+        unfreeze_after_steps=_unfreeze_after_steps(train_cfg, len(payload["train_uids"])),
         unfreeze_blocks=train_cfg.get("unfreeze_blocks", 1),
+        layer_decay=train_cfg.get("layer_decay"),
+        train_centers_per_slot=train_cfg.get("train_centers_per_slot"),
+        init_source=payload.get("init_source"),
         interrupt_after_steps=train_cfg.get("interrupt_after_steps"),
         ckpt_path=out_path,
-        resume=bool(train_cfg.get("resume")) and out_path.is_file(),
+        resume=resuming,
         input_id=payload["input_id"],
         config_id=payload["config_id"],
+        legacy_config_id=payload.get("legacy_config_id"),
     )
     after = sha256_file(out_path) if out_path.is_file() else None
     has_supervision = float(trained.get("supervised_weight") or 0) > 0
@@ -149,12 +201,24 @@ def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str,
         dest=metrics_path,
         img_size=payload["img_size"],
         scope=payload["scope"],
+        tta=tta,
+        slot_planes=payload.get("slot_planes"),
     )
     eval_metrics["steps"] = trained["step"]
     eval_metrics["pooling"] = model.pooling
     eval_metrics["pooling_version"] = model.pooling_version
-    for key in ("attempted_updates", "skipped_updates", "numerical_policy", "updates_planned"):
+    for key in ("attempted_updates", "skipped_updates", "numerical_policy", "updates_planned",
+                "encoder_name", "unfreeze_blocks", "layer_decay", "train_centers_per_slot", "window_sampling",
+                "init_source", "epoch_wall_seconds", "resumed_mid_epoch", "train_wall_seconds",
+                "train_studies_seen", "seconds_per_train_study", "peak_cuda_memory_bytes"):
         eval_metrics[key] = trained.get(key)
+    eval_metrics["encoder_normalization"] = spec.normalization
+    eval_metrics["weights_sha256"] = trust.get("sha256")
+    for key in ("preprocess_hash", "slots", "centers", "config_id", "label_source", "soft_label_coverage",
+                "model_img_size", "slot_planes"):
+        eval_metrics[key] = payload.get(key)
+    eval_metrics["input_resize"] = model.input_resize
+    eval_metrics["aggregator_config"] = model.aggregator_config
     eval_metrics["supervised_weight"] = trained.get("supervised_weight")
     eval_metrics["phase"] = train_cfg.get("phase")
     eval_metrics["resumed"] = bool(train_cfg.get("resume"))
@@ -165,7 +229,7 @@ def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str,
     eval_metrics["notes"] = (
         "optimizer update from allowlisted weights; not an official-hash claim"
         if not trust["official"]
-        else "optimizer update from official DINOv2 hash"
+        else f"optimizer update from official {spec.display} hash"
     )
     eval_metrics["kind"] = "real"
     metrics_path.write_text(json.dumps(eval_metrics), encoding="utf-8")
@@ -192,7 +256,7 @@ def run_job(
         metrics = {"kind": "unavailable", "macro_auc": None, "notes": ",".join(errors)}
     elif not synthetic:
         try:
-            assert_real_encoder(encoder)
+            assert_production_encoder(encoder)
         except Exception as exc:  # noqa: BLE001
             exit_reason = "rejected_encoder"
             metrics = {"kind": "unavailable", "macro_auc": None, "notes": str(exc)}

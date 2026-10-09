@@ -23,6 +23,7 @@ from rsna_knee.ontology import TARGET_COLUMNS
 
 ROOT = Path(__file__).resolve().parents[1]
 OURS = ROOT / "data/labels/labels-full-20261003-v2-labels.jsonl"
+OURS_GOLD = ROOT / "data/labels/labels-goldmeasure-20261009-labels.jsonl"  # gold reports, measurement only
 PUBLIC = {
     "steven_full": ROOT / "state/public-labels/stevenleehans/files/llm_labels_full.csv",
     "steven_v2": ROOT / "state/public-labels/stevenleehans/files/llm_labels_v2.csv",
@@ -33,9 +34,9 @@ TRAIN_CSV = ROOT / "data/metadata/train.csv"
 HIGH, LOW = 0.8, 0.2
 
 
-def our_states() -> dict[str, dict[str, str]]:
+def our_states(path: Path = OURS) -> dict[str, dict[str, str]]:
     out = {}
-    with OURS.open(encoding="utf-8") as handle:
+    with path.open(encoding="utf-8") as handle:
         for line in handle:
             row = json.loads(line)
             if row.get("status") not in {"ok", "valid", None}:
@@ -72,14 +73,40 @@ def macro(values):
     return round(float(np.mean(vals)), 4) if vals else None
 
 
-def state_score(state: str | None, policy: str) -> float:
-    if state == "criterion_positive":
-        return 1.0
-    if state in {"explicit_negative", "borderline_negative_hint"}:
-        return 0.0
-    if state == "uncertain":
-        return 0.5
-    return 0.0 if policy == "unmentioned_negative" else 0.5
+POLICIES = {  # state -> score; None marks a target the policy masks
+    "current_training": {"criterion_positive": 1.0, "explicit_negative": 0.0, "borderline_negative_hint": 0.0},
+    "unmentioned_low": {"criterion_positive": 1.0, "explicit_negative": 0.0, "borderline_negative_hint": 0.0,
+                        "uncertain": 0.5, "not_mentioned": 0.25},
+    "borderline_positive": {"criterion_positive": 1.0, "explicit_negative": 0.0, "borderline_negative_hint": 1.0,
+                            "uncertain": 0.5, "not_mentioned": 0.25},
+    "borderline_half": {"criterion_positive": 1.0, "explicit_negative": 0.0, "borderline_negative_hint": 0.5,
+                        "uncertain": 0.5, "not_mentioned": 0.25},
+}
+
+
+def ours_vs_gold(states: dict[str, dict[str, str]], gold: dict[str, np.ndarray]) -> dict:
+    """AUC of our extraction against gold under several state->score policies.
+
+    current_training scores only the observed (unmasked) targets, as training sees them;
+    the other policies score every gold study.
+    """
+    uids = sorted(set(states) & set(gold))
+    out = {"n": len(uids), "state_vs_gold_positive_rate": {}}
+    for name, mapping in POLICIES.items():
+        per, coverage = {}, {}
+        for i, t in enumerate(TARGET_COLUMNS):
+            pairs = [(gold[u][i], mapping.get(states[u][t])) for u in uids if gold[u][i] in (0.0, 1.0)]
+            pairs = [(y, s) for y, s in pairs if s is not None]
+            coverage[t] = len(pairs)
+            value = auc([y for y, _ in pairs], [s for _, s in pairs])
+            per[t] = None if value is None else round(value, 4)
+        out[name] = {"macro_auc": macro(per.values()), "per_target": per, "n_scored": coverage}
+    for i, t in enumerate(TARGET_COLUMNS):
+        by_state: dict[str, list[float]] = {}
+        for u in uids:
+            by_state.setdefault(states[u][t] or "missing", []).append(float(gold[u][i]))
+        out["state_vs_gold_positive_rate"][t] = {s: [len(v), round(float(np.mean(v)), 2)] for s, v in sorted(by_state.items())}
+    return out
 
 
 def main() -> None:
@@ -104,9 +131,10 @@ def main() -> None:
         per = {t: auc(y[:, i], p[:, i]) for i, t in enumerate(TARGET_COLUMNS)}
         vs_gold[name] = {"n": len(p), "missing": len(missing), "macro_auc": macro(per.values()),
                          "per_target": {t: None if v is None else round(v, 4) for t, v in per.items()}}
-    ours_gold = [u for u in gold_uids if u in ours]
     report["vs_gold"] = vs_gold
-    report["ours_on_gold_n"] = len(ours_gold)
+    if OURS_GOLD.is_file():
+        report["inputs"]["ours_gold"] = {"path": str(OURS_GOLD.relative_to(ROOT)), "sha256": sha256_file(OURS_GOLD)}
+        report["ours_vs_gold"] = ours_vs_gold(our_states(OURS_GOLD), gold)
     report["gold_positives"] = {t: int(y_gold[:, i].sum()) for i, t in enumerate(TARGET_COLUMNS)}
     # 2. Ours vs public on weak studies, split by our per-target state.
     agreement, disagreements = {}, {}
@@ -151,7 +179,9 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     (out / f"{args.tag}.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     (out / f"{args.tag}-disagreement-uids.json").write_text(json.dumps(disagreements, indent=1), encoding="utf-8")
-    print(json.dumps({"vs_gold_macro": {n: v["macro_auc"] for n, v in vs_gold.items()}, "ours_on_gold": len(ours_gold),
+    ours_gold = report.get("ours_vs_gold", {})
+    print(json.dumps({"vs_gold_macro": {n: v["macro_auc"] for n, v in vs_gold.items()},
+                      "ours_vs_gold_macro": {k: v["macro_auc"] for k, v in ours_gold.items() if isinstance(v, dict) and "macro_auc" in v},
                       "disagreements": report["disagreement_counts_vs_steven_full"]}, indent=1))
 
 

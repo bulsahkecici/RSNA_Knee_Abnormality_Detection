@@ -1,0 +1,17 @@
+name: coatnet_0_rw_224
+family: coatnet
+encoder_name: coatnet_0_rw_224
+timm_name: coatnet_0_rw_224
+pretrained_tag: sw_in1k
+weights_file: coatnet_0_rw_224.sw_in1k/model.safetensors
+weights_source: local file only; training never downloads
+# Add the sha256 here only after downloading and hashing the file locally.
+weights_sha256_allowlist: []
+embed_dim: 768
+input_normalization: {input_range: 0-1, mean: [0.5, 0.5, 0.5], std: [0.5, 0.5, 0.5]}
+img_size_multiple: 32
+adaptation_units: 4 stages (MBConv, MBConv, transformer, transformer)
+unfreeze_examples: {1: last transformer stage, 2: both transformer stages, all: stem+stages+norm}
+batchnorm: running statistics frozen in all modes (StudyModel.train)
+notes: >
+  P2 family. Tiny random configs in tests are not CoAtNet-0 results.

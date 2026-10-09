@@ -1,0 +1,16 @@
+name: convnext_tiny
+family: convnext
+encoder_name: convnext_tiny
+timm_name: convnext_tiny
+pretrained_tag: fb_in1k
+weights_file: convnext_tiny.fb_in1k/model.safetensors
+weights_source: local file only; training never downloads
+# Add the sha256 here only after downloading and hashing the file locally.
+weights_sha256_allowlist: []
+embed_dim: 768
+input_normalization: {input_range: 0-1, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
+img_size_multiple: 32
+adaptation_units: 18 ConvNeXt blocks over stages (3,3,9,3); a stage's downsample belongs to its first block
+unfreeze_examples: {3: last stage incl. downsample, 12: last two stages, all: stem+stages+head norm}
+notes: >
+  P2 family. Tiny random configs in tests are not ConvNeXt-Tiny results.

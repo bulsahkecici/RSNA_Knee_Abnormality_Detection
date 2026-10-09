@@ -1,0 +1,46 @@
+# P1 / D5. Prepared, not run. No metric exists for this arm.
+experiment_id: D5
+phase: P1
+priority: 2
+status: prepared
+queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
+hypothesis: Finding attention helps with dense variable windows
+question: Does per-finding masked label attention over the window bag beat D1's masked mean?
+control: D1
+rebase_on: >
+  D1 is the provisional control. Before launch, rebase this arm and its control onto
+  the winning coverage arm among D0-D2 (cache and train_centers_per_slot), keeping
+  the declared change set exactly as listed.
+changes: [train.pooling]
+folds: state/folds-v2-allgold.csv
+labels: {source: hard_masked, file: numeric labels jsonl, sha256: recorded_at_job_build}
+cache:
+  name: v4-dense-three-series
+  storage: npz
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid]
+  centers: 12
+  img_size: 224
+  preprocess_hash: from_manifest
+weights: {encoder: dinov2_vits14, file: dinov2_vits14_pretrain.pth, sha256: configs/dinov2_vits14_allowlist.json}
+train:
+  profile: campaign
+  encoder: dinov2_vits14
+  init: official_pretrained
+  label_source: hard_masked
+  pooling: label_attention
+  unfreeze_blocks: 2
+  unfreeze_after_epochs: 1
+  layer_decay: null
+  train_centers_per_slot: 6
+  img_size: 224
+  epochs: 8
+  effective_batch: 8
+  microbatch: 1
+  seed: 2026
+  lr_head: 0.0001
+  lr_backbone: 0.00001
+evaluation: {windows: all_centers, tta: null, splits: [gold, weak], targets: fixed hard masked labels}
+measure: [gold_macro_auc, weak_macro_auc, per_class_auc, epoch_wall_seconds, seconds_per_train_study,
+          peak_cuda_memory_bytes, evaluation_seconds, skipped_updates]
+max_full_runs: 1
+decision_criterion: Paired gold bootstrap delta vs the control with uncertainty; weak delta must agree in sign.

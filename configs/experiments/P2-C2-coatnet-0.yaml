@@ -1,0 +1,46 @@
+# P2 / C2. Prepared, not run. No metric exists for this arm.
+experiment_id: C2
+phase: P2
+priority: 2
+status: prepared
+queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
+hypothesis: CoAtNet-0/1 learns stronger window representations
+question: Does CoAtNet-0 (last transformer stage trained, 1/4 stages) learn stronger window features than D1 on identical labels, windows and split?
+control: D1
+rebase_on: >
+  D1 is the provisional control. Before launch, rebase this arm and its control onto
+  the winning coverage arm among D0-D2 (cache and train_centers_per_slot), keeping
+  the declared change set exactly as listed.
+changes: [weights, train.encoder, train.unfreeze_blocks]
+folds: state/folds-v2-allgold.csv
+labels: {source: hard_masked, file: numeric labels jsonl, sha256: recorded_at_job_build}
+cache:
+  name: v4-dense-three-series
+  storage: npz
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid]
+  centers: 12
+  img_size: 224
+  preprocess_hash: from_manifest
+weights: {encoder: coatnet_0_rw_224, file: coatnet_0_rw_224.sw_in1k/model.safetensors, sha256: configs/models/coatnet_0_rw_224.yaml}
+train:
+  profile: campaign
+  encoder: coatnet_0_rw_224
+  init: official_pretrained
+  label_source: hard_masked
+  pooling: mean
+  unfreeze_blocks: 1
+  unfreeze_after_epochs: 1
+  layer_decay: null
+  train_centers_per_slot: 6
+  img_size: 224
+  epochs: 8
+  effective_batch: 8
+  microbatch: 1
+  seed: 2026
+  lr_head: 0.0001
+  lr_backbone: 0.00001
+evaluation: {windows: all_centers, tta: null, splits: [gold, weak], targets: fixed hard masked labels}
+measure: [gold_macro_auc, weak_macro_auc, per_class_auc, epoch_wall_seconds, seconds_per_train_study,
+          peak_cuda_memory_bytes, evaluation_seconds, skipped_updates]
+max_full_runs: 1
+decision_criterion: Paired gold bootstrap delta vs the control with uncertainty; weak delta must agree in sign.
