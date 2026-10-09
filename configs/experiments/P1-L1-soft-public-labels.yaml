@@ -1,0 +1,53 @@
+# L1 (promoted ahead of P3 by the 2026-10-10 label audit). Prepared, not run.
+experiment_id: L1
+phase: P1
+priority: 1
+status: prepared
+queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
+hypothesis: Public CC0 soft labels supervise the image model better than our hard masked labels
+question: >
+  With D1's cache, windows, schedule and train UIDs unchanged, does training on the
+  pre-registered equal mean of two public CC0 label tables (soft BCE, gold excluded)
+  improve gold/weak AUC over D1's hard masked local labels? Evaluation targets stay fixed.
+evidence: >
+  Label audit 2026-10-10 on 57 gold reports: our extraction as used in training scores
+  macro AUC 0.804 vs gold (positive precision 0.53-0.79 on several targets); the two
+  public tables score 0.893 and 0.880. Measured on the same small gold set used elsewhere.
+control: D1
+changes: [labels, train.label_source]
+folds: state/folds-v2-allgold.csv
+labels: {source: public_mean_v1, file: state/soft-labels/public-mean-v1.jsonl,
+         sha256: 7d045805be5a8643dc6e1397ad8f71e7875003799a27fd11a05a6d5a9d916e04}
+cache:
+  name: v4-dense-three-series
+  storage: npz
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid]
+  centers: 12
+  img_size: 224
+  preprocess_hash: from_manifest
+weights: {encoder: dinov2_vits14, file: dinov2_vits14_pretrain.pth, sha256: configs/dinov2_vits14_allowlist.json}
+train:
+  profile: campaign
+  encoder: dinov2_vits14
+  init: official_pretrained
+  label_source: public_mean_v1
+  pooling: mean
+  unfreeze_blocks: 2
+  unfreeze_after_epochs: 1
+  layer_decay: null
+  train_centers_per_slot: 6
+  img_size: 224
+  epochs: 8
+  effective_batch: 8
+  microbatch: 1
+  seed: 2026
+  lr_head: 0.0001
+  lr_backbone: 0.00001
+evaluation: {windows: all_centers, tta: null, splits: [gold, weak], targets: fixed hard masked labels}
+measure: [gold_macro_auc, weak_macro_auc, per_class_auc, epoch_wall_seconds, seconds_per_train_study,
+          peak_cuda_memory_bytes, evaluation_seconds, skipped_updates]
+note: Evaluation encodes 2x the windows of D0; inference runtime must be re-measured.
+max_full_runs: 1
+decision_criterion: >
+  Paired gold bootstrap delta vs D1 with uncertainty. Weak AUC is scored against our own
+  hard labels, which this arm no longer trains on, so a weak drop alone does not reject L1.

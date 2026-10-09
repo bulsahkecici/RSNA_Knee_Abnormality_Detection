@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from make_kaggle_kernel import git_identity, source_archive  # noqa: E402
 
 from rsna_knee.data.folds import image_training_uids, load_folds  # noqa: E402
+from rsna_knee.training.experiments import job_train_spec, load_arms, validate_arm  # noqa: E402
 
 LABELS = ROOT / "state/campaigns/campaign-20261003-v2/numeric-training.jsonl"
 WEIGHTS_URL = "https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_pretrain.pth"
@@ -127,6 +128,9 @@ with tarfile.open(fileobj=io.BytesIO(unpack(SOURCE_B64, EXPERIMENT['source_sha25
 sys.path.insert(0, str(SOURCE / 'src'))
 LABELS = WORK / 'labels.jsonl'; LABELS.write_bytes(unpack(LABELS_B64, EXPERIMENT['labels_gz_sha256'], gz=True))
 FOLDS = WORK / 'folds.csv'; FOLDS.write_bytes(unpack(FOLDS_B64, EXPERIMENT['folds_sha256']))
+SOFT = None
+if EXPERIMENT['soft_labels_sha256']:
+    SOFT = WORK / 'soft-labels.jsonl'; SOFT.write_bytes(unpack(SOFT_B64, EXPERIMENT['soft_labels_sha256']))
 from rsna_knee.hashing import sha256_file
 assert sha256_file(LABELS) == EXPERIMENT['labels_sha256'] and sha256_file(FOLDS) == EXPERIMENT['folds_sha256']
 print('Source, labels and folds verified.')
@@ -149,6 +153,8 @@ assert sha256_file(weights) == EXPERIMENT['weights_sha256'], 'official weights h
 (WORK / 'handshake.json').write_text(json.dumps(handshake(), indent=2))
 resources = {'config': str(SOURCE / 'configs/default.yaml') if (SOURCE / 'configs/default.yaml').is_file() else None,
              'folds': str(FOLDS), 'labels': str(LABELS), 'cache': str(manifest_path), 'weights': str(weights)}
+if SOFT is not None:
+    resources['soft_labels'] = str(SOFT)
 resources = {k: v for k, v in resources.items() if v}
 job = build_job(run_id=EXPERIMENT['id'], stage='TRAINING', inputs={k: sha256_file(Path(v)) for k, v in resources.items()},
                 dest=WORK / 'job', resources=resources, train=EXPERIMENT['train'], train_uids=EXPERIMENT['train_uids'],
@@ -179,7 +185,16 @@ print('Result archive (download this one file):', archive_path)
 def generate(config_path: Path, *, cache_kernel: str, cache_manifest_sha256: str, ref: str, outer_fold: str) -> Path:
     spec = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     exp_id = spec.get("experiment_id") or spec["id"]
-    train = dict(spec["train"])
+    errors = validate_arm(spec, load_arms())
+    if errors:
+        raise SystemExit(f"{exp_id} fails experiment validation: {errors}")
+    train = job_train_spec(spec)
+    soft = b""
+    if train.get("label_source", "hard_masked") != "hard_masked":
+        soft_path = ROOT / spec["labels"]["file"]
+        soft = soft_path.read_bytes()
+        if _sha(soft) != spec["labels"]["sha256"]:
+            raise SystemExit("soft label table does not match the sha256 pinned in the experiment config")
     folds_path = ROOT / spec.get("folds", "state/folds-v2-allgold.csv")
     labels, folds = LABELS.read_bytes(), folds_path.read_bytes()
     labels_gz = gzip.compress(labels, mtime=0)
@@ -195,6 +210,7 @@ def generate(config_path: Path, *, cache_kernel: str, cache_manifest_sha256: str
         "folds_file": str(folds_path.relative_to(ROOT)), "folds_sha256": _sha(folds),
         "source_sha256": _sha(archive), "n_source_files": len(names), **git_identity(ref),
         "weights_url": WEIGHTS_URL, "weights_sha256": weights_sha, "submission": False,
+        "soft_labels_sha256": _sha(soft) if soft else None,
     }
     header = (f"# RSNA {exp_id}\n\n**Hypothesis:** {spec.get('hypothesis', '')}\n\n"
               f"Controls: {spec.get('controls', 'see config')}. Outer holdout fold {outer_fold}; all 58 gold "
@@ -208,7 +224,8 @@ def generate(config_path: Path, *, cache_kernel: str, cache_manifest_sha256: str
         _code(AUTH_AND_CACHE),
         _code(f"SOURCE_B64 = {base64.b64encode(archive).decode()!r}\n"
               f"LABELS_B64 = {base64.b64encode(labels_gz).decode()!r}\n"
-              f"FOLDS_B64 = {base64.b64encode(folds).decode()!r}\n" + PAYLOAD
+              f"FOLDS_B64 = {base64.b64encode(folds).decode()!r}\n"
+              f"SOFT_B64 = {base64.b64encode(soft).decode()!r}\n" + PAYLOAD
               + "\n(WORK / 'experiment.json').write_text(json.dumps(EXPERIMENT, indent=1))\n"),
         _code(TRAIN),
         _code(COLLECT),
