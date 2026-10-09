@@ -33,7 +33,15 @@ from rsna_knee.data.cache import (
     write_shard,
 )
 from rsna_knee.data.dicom import SliceGeom, order_slices, projection_key
-from rsna_knee.data.preprocess import PREPROCESS_VERSION, encode_uint8, preprocess_hash, process_slice
+from rsna_knee.data.preprocess import (
+    PREPROCESS_VERSION,
+    crop_slice,
+    encode_uint8,
+    normalize_with_window,
+    preprocess_hash,
+    process_slice,
+    series_window,
+)
 from rsna_knee.hashing import sha256_file, sha256_json
 from rsna_knee.ontology import SERIES_ID_COL, STUDY_ID_COL
 
@@ -71,12 +79,12 @@ def centers_for_series(n: int, k: int = 3, *, strategy: str = "interior", lower:
     return np.rint(positions).astype(int).tolist()
 
 
-def _selection_policy(size, n_centers, strategy, lower, upper, slots):
+def _selection_policy(size, n_centers, strategy, lower, upper, slots, crop_mm=160.0, intensity="slice"):
     here = Path(__file__).parent
     code = {name: sha256_file(here / name) for name in ("cache_build.py", "cache.py", "preprocess.py", "dicom.py")}
     return {"size": size, "n_centers": n_centers, "slots": [list(x) for x in slots], "storage_format": "npz",
             "center_strategy": strategy, "center_lower": lower, "center_upper": upper,
-            "crop_mm": 160.0, "clip_percentiles": [0.5, 99.5], "dtype": "uint8",
+            "crop_mm": crop_mm, "intensity": intensity, "clip_percentiles": [0.5, 99.5], "dtype": "uint8",
             "builder_version": CACHE_BUILDER_VERSION, "code_sha256": code,
             "pixel_runtime_versions": {name: importlib.metadata.version(name) for name in ("numpy", "Pillow", "pydicom")}}
 
@@ -183,24 +191,39 @@ def physical_geometry(ordered: list[SliceGeom]) -> dict[str, Any]:
             "extent_mm": round(float(keys[-1] - keys[0]), 3)}
 
 
-def _triplets(ordered, *, size, n_centers, strategy, lower, upper, get_pixels):
+def _triplets(ordered, *, size, n_centers, strategy, lower, upper, get_pixels, crop_mm=160.0, intensity="slice"):
     centers = centers_for_series(len(ordered), n_centers, strategy=strategy, lower=lower, upper=upper)
     triples = [[max(0, min(len(ordered) - 1, c + d)) for d in (-1, 0, 1)] for c in centers]
     selected = sorted({i for triple in triples for i in triple})
-    processed, crop_modes = {}, Counter()
-    for i in selected:
-        geom = ordered[i]
-        img, details = process_slice(get_pixels(geom), slope=geom.slope, intercept=geom.intercept,
-                                     photometric=geom.photometric, spacing=geom.pixel_spacing, size=size)
+    processed, crop_modes, window = {}, Counter(), None
+    if intensity == "slice":
+        for i in selected:
+            geom = ordered[i]
+            img, details = process_slice(get_pixels(geom), slope=geom.slope, intercept=geom.intercept,
+                                         photometric=geom.photometric, spacing=geom.pixel_spacing, size=size,
+                                         crop_mm=crop_mm)
+            processed[i] = img
+            crop_modes[details["crop_mode"]] += 1
+    elif intensity == "series":
+        crops = {}
+        for i in selected:
+            geom = ordered[i]
+            crops[i], mode = crop_slice(get_pixels(geom), slope=geom.slope, intercept=geom.intercept,
+                                        photometric=geom.photometric, spacing=geom.pixel_spacing, crop_mm=crop_mm)
+            crop_modes[mode] += 1
+        window = series_window(list(crops.values()))
+        processed = {i: normalize_with_window(c, window, size) for i, c in crops.items()}
+    else:
+        raise ValueError("intensity must be 'slice' or 'series'")
+    for img in processed.values():
         if img.shape != (size, size) or not np.isfinite(img).all() or img.min() < 0 or img.max() > 1.00001:
             raise ValueError("Invalid preprocessed pixel range or shape")
-        processed[i] = img
-        crop_modes[details["crop_mode"]] += 1
     tensor = np.stack([np.stack([processed[i] for i in triple]) for triple in triples]).astype(np.float32)
     return tensor, {"n_slices": len(ordered), "centers_idx": centers, "selected_indices": selected,
                     "triplet_indices": triples, "n_decoded_slices": len(selected), "crop_modes": dict(crop_modes),
                     "duplicate_centers": n_centers - len(set(centers)),
                     "duplicate_sop_count": len(ordered) - len({g.sop for g in ordered}),
+                    "intensity_window": None if window is None else [round(window[0], 4), round(window[1], 4)],
                     **physical_geometry(ordered)}
 
 
@@ -212,14 +235,15 @@ def series_to_centers(pairs, *, size, n_centers, center_strategy="interior", cen
     return tensor, mode
 
 
-def _series_from_disk(series_dir, *, size, n_centers, strategy, lower, upper):
+def _series_from_disk(series_dir, *, size, n_centers, strategy, lower, upper, crop_mm=160.0, intensity="slice"):
     headers, error = _load_headers(series_dir)
     if error:
         return None, {"error": error}
     ordered, order = order_slices(headers)
     try:
         tensor, details = _triplets(ordered, size=size, n_centers=n_centers, strategy=strategy,
-                                    lower=lower, upper=upper, get_pixels=lambda g: _decode_pixels(Path(g.path)))
+                                    lower=lower, upper=upper, get_pixels=lambda g: _decode_pixels(Path(g.path)),
+                                    crop_mm=crop_mm, intensity=intensity)
         details["order"] = order
         details["resolution"] = [ordered[0].rows, ordered[0].cols]
         return tensor, details
@@ -389,7 +413,8 @@ def _prepare_study(uid: str, rows: list[dict[str, str]] | None, ctx: dict[str, A
             details["error"] = "missing_plane_metadata"
         else:
             arr, info = _series_from_disk(study_dir / row[SERIES_ID_COL], size=ctx["size"], n_centers=ctx["n_centers"],
-                                          strategy=ctx["strategy"], lower=ctx["lower"], upper=ctx["upper"])
+                                          strategy=ctx["strategy"], lower=ctx["lower"], upper=ctx["upper"],
+                                          crop_mm=ctx["crop_mm"], intensity=ctx["intensity"])
             details.update(info)
         if arr is not None and float(arr.max()) <= float(arr.min()):
             arr = None
@@ -448,7 +473,7 @@ def build_cache(*, series_csv, dicom_root, dest, study_ids=None, limit=None, siz
                 layout="study/series", resume=True, strict_series=True, center_strategy="interior",
                 center_lower=DENSE_CENTER_RANGE[0], center_upper=DENSE_CENTER_RANGE[1], min_present_slots=1,
                 slots=PILOT_SLOTS, max_cache_bytes=DEFAULT_MAX_CACHE_BYTES,
-                progress_every=25, index_flush_every=50, workers=1):
+                progress_every=25, index_flush_every=50, workers=1, crop_mm=160.0, intensity="slice"):
     slots = tuple(tuple(slot) for slot in slots)
     if (not slots or len(set(slots)) != len(slots)
             or any(len(slot) != 2 or slot[0] not in {"Sagittal", "Coronal", "Axial"}
@@ -469,7 +494,9 @@ def build_cache(*, series_csv, dicom_root, dest, study_ids=None, limit=None, siz
         raise ValueError("Requested studies must be nonempty, safe and unique")
     dest.mkdir(parents=True, exist_ok=True)
     budget = ByteBudget(dest, max_cache_bytes)
-    policy = _selection_policy(size, n_centers, center_strategy, center_lower, center_upper, slots)
+    if intensity not in {"slice", "series"} or not crop_mm > 0:
+        raise ValueError("Invalid intensity mode or crop size")
+    policy = _selection_policy(size, n_centers, center_strategy, center_lower, center_upper, slots, crop_mm, intensity)
     pp_hash, shape, slot_names = preprocess_hash(policy), [len(slots), n_centers, 3, size, size], policy["slots"]
     sources = {"series_csv": sha256_file(series_csv), "dicom_root": str(dicom_root.resolve()),
                "strict_series": str(strict_series), "min_present_slots": str(min_present_slots)}
@@ -499,7 +526,8 @@ def build_cache(*, series_csv, dicom_root, dest, study_ids=None, limit=None, siz
     context = {"dest": dest, "dicom_root": dicom_root, "layout": layout, "slots": slots, "sources": sources,
                "resume": resume, "pp_hash": pp_hash, "shape": shape, "slot_names": slot_names, "policy": policy,
                "n_centers": n_centers, "size": size, "strategy": center_strategy, "lower": center_lower,
-               "upper": center_upper, "strict_series": strict_series, "min_present_slots": min_present_slots}
+               "upper": center_upper, "strict_series": strict_series, "min_present_slots": min_present_slots,
+               "crop_mm": crop_mm, "intensity": intensity}
     print(json.dumps({"event": "cache_start", "n_requested": len(uids), "shape": shape, "workers": workers,
                       "sampling": center_strategy, "preprocess_hash": pp_hash}), flush=True)
     try:

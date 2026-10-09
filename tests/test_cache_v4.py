@@ -162,3 +162,19 @@ def test_parallel_build_matches_sequential(tmp_path):
     assert a["sha256"] == b["sha256"] and a["slot_mask"] == b["slot_mask"]
     assert sequential["preprocess_hash"] == parallel["preprocess_hash"]
     assert manifest_ready(tmp_path / "par" / "manifest.json") == (True, "full")
+
+
+def test_series_intensity_window_preserves_between_slice_contrast(tmp_path):
+    csv_path, _ = _study(tmp_path)
+    series = _build(tmp_path, csv_path, dest="series", slots=PILOT_SLOTS, intensity="series", crop_mm=3.0)
+    per_slice = _build(tmp_path, csv_path, dest="slice", slots=PILOT_SLOTS, crop_mm=3.0)
+    assert series["preprocess_config"]["intensity"] == "series" and series["preprocess_config"]["crop_mm"] == 3.0
+    assert series["preprocess_hash"] != per_slice["preprocess_hash"]
+    detail = series["studies"]["1.2.3"]["series_details"][0]
+    assert detail["intensity_window"] is not None
+    window = load_shard("1.2.3", tmp_path / "series")[0, 6].astype(float)  # a [prev, centre, next] window
+    flat = load_shard("1.2.3", tmp_path / "slice")[0, 6].astype(float)
+    # Synthetic slices differ by a constant offset per instance: a shared window keeps that ordering,
+    # per-slice normalization erases it.
+    assert window[0].mean() < window[1].mean() < window[2].mean()
+    assert abs(flat[0].mean() - flat[2].mean()) < 1.0

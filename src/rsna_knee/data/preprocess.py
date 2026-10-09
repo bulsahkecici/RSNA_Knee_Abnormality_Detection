@@ -57,15 +57,44 @@ def process_slice(
     size: int = 224,
     crop_mm: float = 160.0,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    arr = apply_slope_intercept(np.asarray(pixels), slope, intercept)
-    arr = invert_monochrome1(arr, photometric)
-    rsl, csl, crop_mode = mm_crop_box(arr.shape[0], arr.shape[1], spacing, crop_mm=crop_mm)
-    arr = arr[rsl, csl]
+    arr, crop_mode = crop_slice(pixels, slope=slope, intercept=intercept, photometric=photometric,
+                                spacing=spacing, crop_mm=crop_mm)
     arr = percentile_clip(arr)
     arr = to_unit(arr)
     arr = resize_2d(arr, size=size)
     meta = {"crop_mode": crop_mode, "size": size, "photometric": photometric, "version": PREPROCESS_VERSION}
     return arr, meta
+
+
+def crop_slice(
+    pixels: np.ndarray,
+    *,
+    slope: float = 1.0,
+    intercept: float = 0.0,
+    photometric: str | None = None,
+    spacing: tuple[float, float] | None = None,
+    crop_mm: float = 160.0,
+) -> tuple[np.ndarray, str]:
+    """Rescale, MONOCHROME1-invert and physically crop one slice, without intensity scaling."""
+    arr = apply_slope_intercept(np.asarray(pixels), slope, intercept)
+    arr = invert_monochrome1(arr, photometric)
+    rsl, csl, crop_mode = mm_crop_box(arr.shape[0], arr.shape[1], spacing, crop_mm=crop_mm)
+    return arr[rsl, csl], crop_mode
+
+
+def series_window(crops: list[np.ndarray], low: float = 0.5, high: float = 99.5) -> tuple[float, float]:
+    """One intensity window shared by every decoded slice of a series."""
+    values = np.concatenate([c.ravel() for c in crops])
+    lo, hi = (float(v) for v in np.percentile(values, [low, high]))
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        lo, hi = float(values.min()), float(values.max() + 1e-6)
+    return lo, hi
+
+
+def normalize_with_window(crop: np.ndarray, window: tuple[float, float], size: int) -> np.ndarray:
+    lo, hi = window
+    arr = ((np.clip(crop, lo, hi) - lo) / (hi - lo)).astype(np.float32)
+    return resize_2d(arr, size=size)
 
 
 def adjacent_triplet(stack: np.ndarray, center: int) -> np.ndarray:
