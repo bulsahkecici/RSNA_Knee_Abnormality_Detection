@@ -32,7 +32,7 @@ def save(path: Path, state: dict) -> None:
     tmp.replace(path)
 
 
-def watch(campaign: str, slug: str, interval: int, max_hours: float) -> dict:
+def watch(campaign: str, slug: str, interval: int, max_hours: float, file_pattern: str | None = None) -> dict:
     folder = ROOT / "state/campaigns" / campaign
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{slug}.json"
@@ -51,7 +51,8 @@ def watch(campaign: str, slug: str, interval: int, max_hours: float) -> dict:
             out = ROOT / "artifacts/kaggle" / slug / "output"
             out.mkdir(parents=True, exist_ok=True)
             try:
-                kaggle("kernels", "output", state["kernel"], "-p", str(out), timeout=1800)
+                extra = ["--file-pattern", file_pattern] if file_pattern else []
+                kaggle("kernels", "output", state["kernel"], "-p", str(out), *extra, timeout=1800)
                 state["output_dir"] = str(out.relative_to(ROOT))
                 state["output_files"] = sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_file())[:200]
             except (RuntimeError, subprocess.TimeoutExpired) as error:
@@ -73,8 +74,10 @@ def main() -> None:
     parser.add_argument("--slug", required=True)
     parser.add_argument("--interval", type=int, default=120)
     parser.add_argument("--max-hours", type=float, default=12.0)
+    parser.add_argument("--file-pattern", default=None,
+                        help="regex of output files to download; use it for large caches that stay remote")
     args = parser.parse_args()
-    state = watch(args.campaign, args.slug, args.interval, args.max_hours)
+    state = watch(args.campaign, args.slug, args.interval, args.max_hours, args.file_pattern)
     print(json.dumps({k: state.get(k) for k in ("kernel", "phase", "observed", "output_dir", "output_error")}))
 
 
