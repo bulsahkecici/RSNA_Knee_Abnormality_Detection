@@ -1,5 +1,6 @@
 """Package a reviewed candidate, prove offline execution, then submit once."""
 import csv
+import io
 import hashlib
 import json
 import math
@@ -9,11 +10,39 @@ import time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 
+def track_submission(state,statepath,call,write,notify):
+ """Read-only reconciliation by the unique description, never resubmit."""
+ description=state.get('submission_description')
+ if not description:raise RuntimeError('Reconcile submission without recorded description')
+ while True:
+  rows=list(csv.DictReader(io.StringIO(call(['competitions','submissions','-c','rsna-knee-abnormality-detection','--csv']))))
+  matches=[row for row in rows if row['description']==description]
+  if len(matches)>1:raise RuntimeError('Ambiguous submission description; reconcile receipts')
+  if matches:
+   row=matches[0]
+   if state.get('submission_ref') and str(state['submission_ref'])!=row['ref']:
+    raise RuntimeError('Submission receipt changed')
+   state.update(submission_ref=row['ref'],submission_status=row['status'],updated_ts=time.time())
+   terminal=row['status'].split('.')[-1].upper()
+   if terminal in {'COMPLETE','ERROR'}:
+    score=row.get('publicScore','')
+    if score:
+     value=float(score)
+     if not math.isfinite(value) or not 0<=value<=1:raise RuntimeError('Invalid Kaggle public score')
+     state['public_score']=value
+    state['phase']='SCORED' if terminal=='COMPLETE' and score else 'SUBMISSION_FAILED'
+    write(statepath,state);notify('Kaggle sonucu: '+str(state.get('public_score',row['status'])))
+    return state
+   write(statepath,state)
+  time.sleep(60)
+
 def publish(item,folder,call,write,notify):
  statepath=folder/'publication.json'
  if statepath.exists():
   state=json.loads(statepath.read_text())
-  if state['phase'] in ['SUBMIT_UNKNOWN','SUBMITTED','ASSET_PUSH_UNKNOWN','KERNEL_PUSH_UNKNOWN']:
+  if state['phase'] in ['SCORED','SUBMISSION_FAILED']:return state
+  if state['phase']=='SUBMITTED':return track_submission(state,statepath,call,write,notify)
+  if state['phase'] in ['SUBMIT_UNKNOWN','ASSET_PUSH_UNKNOWN','KERNEL_PUSH_UNKNOWN']:
    raise RuntimeError('Reconcile ambiguous/publication state before retry')
  else:state={'candidate':item['kernel'],'phase':'PREPARING'}
  def save(phase):state.update(phase=phase,updated_ts=time.time());write(statepath,state)
@@ -57,5 +86,7 @@ def publish(item,folder,call,write,notify):
  save('OFFLINE_PASSED')
  limits=call(['competitions','submission-limits','-c','rsna-knee-abnormality-detection']);state['limits']=limits
  if 'Remaining today: 0' in limits:save('DAILY_LIMIT_WAIT');notify('Aday doğrulandı; günlük gönderim limiti bekleniyor');return
+ state['submission_description']='Reviewed autonomous v3 candidate '+tag+' ['+str(time.time_ns())+']'
  save('SUBMIT_UNKNOWN')
- state['receipt']=call(['competitions','submit','rsna-knee-abnormality-detection','-k',kernel,'-v','1','-f','submission.csv','-m','Reviewed autonomous v3 candidate '+tag]);save('SUBMITTED');notify('Yeni aday Kaggle yarışmasına gönderildi: '+tag)
+ state['receipt']=call(['competitions','submit','rsna-knee-abnormality-detection','-k',kernel,'-v','1','-f','submission.csv','-m',state['submission_description']]);save('SUBMITTED');notify('Yeni aday Kaggle yarışmasına gönderildi: '+tag)
+ return track_submission(state,statepath,call,write,notify)
