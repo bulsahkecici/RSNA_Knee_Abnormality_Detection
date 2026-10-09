@@ -52,7 +52,7 @@ def watch(campaign: str, slug: str, interval: int, max_hours: float, file_patter
             out.mkdir(parents=True, exist_ok=True)
             try:
                 extra = ["--file-pattern", file_pattern] if file_pattern else []
-                kaggle("kernels", "output", state["kernel"], "-p", str(out), *extra, timeout=1800)
+                kaggle("kernels", "output", state["kernel"], "-p", str(out), "--page-size", "200", *extra, timeout=1800)
                 state["output_dir"] = str(out.relative_to(ROOT))
                 state["output_files"] = sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_file())[:200]
             except (RuntimeError, subprocess.TimeoutExpired) as error:
