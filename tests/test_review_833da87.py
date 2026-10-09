@@ -195,9 +195,22 @@ def test_cache_resume_rejects_a_different_shape(tmp_path):
 def test_manifest_without_shard_is_not_cache_ready(tmp_path):
     root = tmp_path / "cache"
     root.mkdir()
+    from rsna_knee.data.cache_build import CACHE_BUILDER_VERSION
+    from rsna_knee.data.preprocess import preprocess_hash
+
+    policy = {"size": 28, "n_centers": 3, "slots": [["Sagittal", "fluid"], ["Coronal", "fluid"], ["Axial", "fluid"]],
+              "storage_format": "npz"}
+    meta = {"uid": "1.2.3", "sha256": "abc", "shape": [3, 3, 3, 28, 28], "preprocess_config": policy,
+            "slots": policy["slots"], "n_centers": 3}
     manifest = {
         "scope": "pilot",
-        "studies": {"1.2.3": {"sha256": "abc", "shape": [3, 3, 3, 28, 28]}},
+        "builder_version": CACHE_BUILDER_VERSION,
+        "preprocess_config": policy,
+        "preprocess_hash": preprocess_hash(policy),
+        "compressed_byte_total": 0,
+        "max_cache_bytes": 1,
+        "studies": {"1.2.3": meta},
+        "requested_uids": ["1.2.3"],
         "n_studies": 1,
         "n_requested": 1,
     }
@@ -205,7 +218,7 @@ def test_manifest_without_shard_is_not_cache_ready(tmp_path):
     path.write_text(json.dumps(manifest), encoding="utf-8")
     ready, reason = manifest_ready(path)
     assert ready is False
-    assert reason == "shard_missing"
+    assert reason == "shard_missing:1.2.3"
     state = PipelineState(run_id="cache", synthetic=False, artifacts={})
     from rsna_knee.roots import roots_for
 
@@ -214,7 +227,7 @@ def test_manifest_without_shard_is_not_cache_ready(tmp_path):
     (real_cache / "manifest.json").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     out = stage_cache(state, Registry(tmp_path / "reg.sqlite"))
     assert out.stage == Stage.BLOCKED
-    assert out.blocked_reason == "shard_missing"
+    assert out.blocked_reason == "shard_missing:1.2.3"
 
 
 def _labels(path, rows):

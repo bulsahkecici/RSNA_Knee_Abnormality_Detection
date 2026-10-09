@@ -5,7 +5,8 @@ import csv
 import numpy as np
 import pydicom
 
-from rsna_knee.data.cache_build import build_cache
+from rsna_knee.data.cache import load_shard
+from rsna_knee.data.cache_build import build_cache, manifest_ready
 from rsna_knee.ontology import SERIES_ID_COL, STUDY_ID_COL
 
 
@@ -84,7 +85,7 @@ def test_cache_orders_geometry_and_quarantines_missing_study(tmp_path):
         n_centers=3,
     )
     assert "missing.study" in manifest["quarantine"]
-    assert not (tmp_path / "cache" / "missing.study.npy").exists()
+    assert not (tmp_path / "cache" / "missing.study.npz").exists()
     meta = manifest["studies"][study]
     assert meta["shape"][0] == 3
     assert meta["shape"][1] == 3
@@ -93,8 +94,11 @@ def test_cache_orders_geometry_and_quarantines_missing_study(tmp_path):
     assert meta["order"] == "iop_ipp"
     assert meta["slot_mask"][2] == 0.0
     assert "sha256" in meta
-    volume = np.load(tmp_path / "cache" / f"{study}.npy")
+    volume = load_shard(study, tmp_path / "cache")
     assert volume.shape[2] == 3
+    sagittal = meta["series_details"][0]
+    assert sagittal["slice_spacing_mm_median"] == 10.0 and sagittal["extent_mm"] == 20.0
+    assert manifest_ready(tmp_path / "cache" / "manifest.json") == (False, "requested_scope_incomplete")
 
 
 def test_inference_masks_bad_series_but_never_caches_empty_study(tmp_path, monkeypatch):
@@ -108,18 +112,20 @@ def test_inference_masks_bad_series_but_never_caches_empty_study(tmp_path, monke
         writer.writeheader()
         writer.writerows(rows)
     (tmp_path/'dicom'/'study').mkdir(parents=True)
-    monkeypatch.setattr('rsna_knee.data.cache_build._load_slices',
-                        lambda p: ([], 'codec_or_decode:test') if p.name == 'bad' else ([(None, None)], None))
-    monkeypatch.setattr('rsna_knee.data.cache_build.series_to_centers',
-                        lambda pairs, **kwargs: (np.ones((3, 3, 28, 28), dtype=np.float32), 'test'))
+    def fake_series(series_dir, **kwargs):
+        if series_dir.name == 'bad':
+            return None, {'error': 'codec_or_decode:test'}
+        return np.ones((3, 3, 28, 28), dtype=np.float32) * np.linspace(0, 1, 28), {'order': 'test'}
+    monkeypatch.setattr('rsna_knee.data.cache_build._series_from_disk', fake_series)
     result = build_cache(series_csv=series_csv, dicom_root=tmp_path/'dicom', dest=tmp_path/'partial',
-                         strict_series=False, size=28)
+                         strict_series=False, size=28, n_centers=3)
     assert result['studies']['study']['slot_mask'] == [0.0, 1.0, 0.0]
-    assert result['studies']['study']['series_errors'][0]['series'] == 'bad'
-    strict = build_cache(series_csv=series_csv, dicom_root=tmp_path/'dicom', dest=tmp_path/'strict', size=28)
+    assert result['studies']['study']['series_details'][0]['error'] == 'codec_or_decode:test'
+    strict = build_cache(series_csv=series_csv, dicom_root=tmp_path/'dicom', dest=tmp_path/'strict', size=28, n_centers=3)
     assert 'study' in strict['quarantine']
-    monkeypatch.setattr('rsna_knee.data.cache_build._load_slices', lambda p: ([], 'codec_or_decode:test'))
+    monkeypatch.setattr('rsna_knee.data.cache_build._series_from_disk',
+                        lambda series_dir, **kwargs: (None, {'error': 'codec_or_decode:test'}))
     empty = build_cache(series_csv=series_csv, dicom_root=tmp_path/'dicom', dest=tmp_path/'empty',
-                        strict_series=False, size=28)
+                        strict_series=False, size=28, n_centers=3)
     assert 'study' in empty['quarantine']
-    assert not (tmp_path/'empty'/'study.npy').exists()
+    assert not (tmp_path/'empty'/'study.npz').exists()
