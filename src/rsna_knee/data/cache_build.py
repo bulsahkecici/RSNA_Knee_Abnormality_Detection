@@ -33,7 +33,7 @@ from rsna_knee.data.cache import (
     write_shard,
 )
 from rsna_knee.data.dicom import SliceGeom, order_slices, projection_key
-from rsna_knee.data.preprocess import PREPROCESS_VERSION, preprocess_hash, process_slice
+from rsna_knee.data.preprocess import PREPROCESS_VERSION, encode_uint8, preprocess_hash, process_slice
 from rsna_knee.hashing import sha256_file, sha256_json
 from rsna_knee.ontology import SERIES_ID_COL, STUDY_ID_COL
 
@@ -350,11 +350,105 @@ def _coverage(studies, quarantine, slots):
     return coverage
 
 
+def _prepare_study(uid: str, rows: list[dict[str, str]] | None, ctx: dict[str, Any]):
+    """Decode one study without touching the cache payload.
+
+    Returns ("fail", reason, details), ("reuse", meta) or ("build", uint8 volume, meta).
+    Runs in a worker process when ``workers > 1``; the parent alone writes shards,
+    so the byte budget and atomic writes stay single-writer.
+    """
+    if not rows:
+        return "fail", "missing_study_metadata", {}
+    study_dir = ctx["dicom_root"] / uid if ctx["layout"] == "study/series" else ctx["dicom_root"]
+    if not study_dir.is_dir():
+        return "fail", "missing_study_dicom", {}
+    slots, dest = ctx["slots"], ctx["dest"]
+    selected = select_series_for_slots(rows, slots=slots, study_dir=study_dir)
+    files = [p for row in selected if row is not None for p in sorted((study_dir / row[SERIES_ID_COL]).glob("*.dcm"))]
+    study_sources = {**ctx["sources"], "dicom_bytes": _dicom_bytes_sha(files),
+                     "selected_series": sha256_json([r[SERIES_ID_COL] if r else None for r in selected])}
+    prior = None
+    if ctx["resume"]:
+        try:
+            prior = {"shard": str(dest / f"{uid}.npz"), "meta": json.loads((dest / f"{uid}.json").read_text())}
+        except (OSError, ValueError):
+            pass
+    meta = _prior_reusable(prior, pp_hash=ctx["pp_hash"], shape=ctx["shape"], source_hashes=study_sources,
+                           slots=ctx["slot_names"], n_centers=ctx["n_centers"])
+    if meta is not None:
+        return "reuse", meta
+    arrays, masks, series_details = [], [], []
+    for slot_id, row in enumerate(selected):
+        plane, kind = slots[slot_id]
+        details = {"plane": plane, "requested_kind": kind, "series_uid": row[SERIES_ID_COL] if row else None,
+                   "fluid_sensitive": row.get("Fluid_Sensitive") if row else None,
+                   "fat_suppression": row.get("Fat_Suppression") if row else None,
+                   "fallback": bool(row and kind == "fluid" and row.get("Fluid_Sensitive") != "1")}
+        if row is None:
+            arr = None
+            details["error"] = "missing_plane_metadata"
+        else:
+            arr, info = _series_from_disk(study_dir / row[SERIES_ID_COL], size=ctx["size"], n_centers=ctx["n_centers"],
+                                          strategy=ctx["strategy"], lower=ctx["lower"], upper=ctx["upper"])
+            details.update(info)
+        if arr is not None and float(arr.max()) <= float(arr.min()):
+            arr = None
+            details["error"] = "constant_preprocessed_series"
+        arrays.append(arr)
+        masks.append(float(arr is not None))
+        details["present"] = arr is not None
+        series_details.append(details)
+        error = details.get("error")
+        if error and error not in {"no_dicom_files", "missing_plane_metadata"} and ctx["strict_series"]:
+            return "fail", error, {"series_details": series_details}
+    if sum(masks) < ctx["min_present_slots"]:
+        return "fail", "insufficient_decodable_planes", {"slot_mask": masks, "series_details": series_details}
+    reference = next(a for a in arrays if a is not None)
+    volume = encode_uint8(np.stack([a if a is not None else np.zeros_like(reference) for a in arrays]))
+    meta = {"uid": uid, "shape": list(volume.shape), "dtype": "uint8", "preprocess_version": PREPROCESS_VERSION,
+            "storage_format": "npz", "shard_filename": f"{uid}.npz",
+            "preprocess_hash": ctx["pp_hash"], "preprocess_config": ctx["policy"], "slot_mask": masks,
+            "source_hashes": study_sources, "slots": ctx["slot_names"], "n_centers": ctx["n_centers"],
+            "order": next((d.get("order") for d in series_details if d.get("order")), "none"),
+            "series_details": series_details, "synthetic": False}
+    return "build", volume, meta
+
+
+def _prepare_or_error(uid, rows, ctx):
+    try:
+        return _prepare_study(uid, rows, ctx)
+    except (OSError, ValueError, RuntimeError) as exc:
+        return exc
+
+
+def _prepared(uids, grouped, ctx, workers):
+    """Yield (uid, outcome) in request order; at most 2 x workers studies are in flight."""
+    if workers == 1:
+        for uid in uids:
+            yield uid, _prepare_or_error(uid, grouped.get(uid), ctx)
+        return
+    from collections import deque
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        pending: deque = deque()
+        queue = iter(uids)
+        for uid in queue:
+            pending.append((uid, pool.submit(_prepare_or_error, uid, grouped.get(uid), ctx)))
+            if len(pending) >= 2 * workers:
+                break
+        while pending:
+            uid, future = pending.popleft()
+            nxt = next(queue, None)
+            if nxt is not None:
+                pending.append((nxt, pool.submit(_prepare_or_error, nxt, grouped.get(nxt), ctx)))
+            yield uid, future.result()
+
+
 def build_cache(*, series_csv, dicom_root, dest, study_ids=None, limit=None, size=224, n_centers=DENSE_N_CENTERS,
                 layout="study/series", resume=True, strict_series=True, center_strategy="interior",
                 center_lower=DENSE_CENTER_RANGE[0], center_upper=DENSE_CENTER_RANGE[1], min_present_slots=1,
                 slots=PILOT_SLOTS, max_cache_bytes=DEFAULT_MAX_CACHE_BYTES,
-                progress_every=25, index_flush_every=50):
+                progress_every=25, index_flush_every=50, workers=1):
     slots = tuple(tuple(slot) for slot in slots)
     if (not slots or len(set(slots)) != len(slots)
             or any(len(slot) != 2 or slot[0] not in {"Sagittal", "Coronal", "Axial"}
@@ -362,7 +456,7 @@ def build_cache(*, series_csv, dicom_root, dest, study_ids=None, limit=None, siz
         raise ValueError("Invalid or duplicate cache slots")
     if size < 1 or n_centers < 1 or not 1 <= min_present_slots <= len(slots):
         raise ValueError("Invalid cache dimensions or minimum plane count")
-    if layout not in {"study/series", "series"} or progress_every < 1 or index_flush_every < 1:
+    if layout not in {"study/series", "series"} or progress_every < 1 or index_flush_every < 1 or workers < 1:
         raise ValueError("Invalid layout or progress/checkpoint interval")
     centers_for_series(3, n_centers, strategy=center_strategy, lower=center_lower, upper=center_upper)
     grouped = _read_series_csv(series_csv)
@@ -402,76 +496,28 @@ def build_cache(*, series_csv, dicom_root, dest, study_ids=None, limit=None, siz
         with (dest / "progress.jsonl").open("a") as handle:
             handle.write(json.dumps(event) + "\n")
 
-    print(json.dumps({"event": "cache_start", "n_requested": len(uids), "shape": shape,
+    context = {"dest": dest, "dicom_root": dicom_root, "layout": layout, "slots": slots, "sources": sources,
+               "resume": resume, "pp_hash": pp_hash, "shape": shape, "slot_names": slot_names, "policy": policy,
+               "n_centers": n_centers, "size": size, "strategy": center_strategy, "lower": center_lower,
+               "upper": center_upper, "strict_series": strict_series, "min_present_slots": min_present_slots}
+    print(json.dumps({"event": "cache_start", "n_requested": len(uids), "shape": shape, "workers": workers,
                       "sampling": center_strategy, "preprocess_hash": pp_hash}), flush=True)
     try:
-        for done, uid in enumerate(uids, 1):
+        for done, (uid, outcome) in enumerate(_prepared(uids, grouped, context, workers), 1):
             try:
                 if budget.total > max_cache_bytes:
                     raise CacheBudgetExceeded("cache_budget_exceeded:existing_payload")
-                rows = grouped.get(uid)
-                if not rows:
-                    fail(uid, "missing_study_metadata")
+                if isinstance(outcome, Exception):
+                    raise outcome
+                kind, *payload = outcome
+                if kind == "fail":
+                    fail(uid, payload[0], **payload[1])
                     continue
-                study_dir = dicom_root / uid if layout == "study/series" else dicom_root
-                if not study_dir.is_dir():
-                    fail(uid, "missing_study_dicom")
-                    continue
-                selected = select_series_for_slots(rows, slots=slots, study_dir=study_dir)
-                files = [p for row in selected if row is not None for p in sorted((study_dir / row[SERIES_ID_COL]).glob("*.dcm"))]
-                study_sources = {**sources, "dicom_bytes": _dicom_bytes_sha(files),
-                                 "selected_series": sha256_json([r[SERIES_ID_COL] if r else None for r in selected])}
-                prior = None
-                if resume:
-                    try:
-                        prior = {"shard": str(dest / f"{uid}.npz"), "meta": json.loads((dest / f"{uid}.json").read_text())}
-                    except (OSError, ValueError):
-                        pass
-                meta = _prior_reusable(prior, pp_hash=pp_hash, shape=shape, source_hashes=study_sources,
-                                       slots=slot_names, n_centers=n_centers)
-                if meta is not None:
-                    studies[uid] = meta
+                if kind == "reuse":
+                    studies[uid] = payload[0]
                     counts["reused"] += 1
                     continue
-                arrays, masks, series_details, fatal = [], [], [], None
-                for slot_id, row in enumerate(selected):
-                    plane, kind = slots[slot_id]
-                    details = {"plane": plane, "requested_kind": kind, "series_uid": row[SERIES_ID_COL] if row else None,
-                               "fluid_sensitive": row.get("Fluid_Sensitive") if row else None,
-                               "fat_suppression": row.get("Fat_Suppression") if row else None,
-                               "fallback": bool(row and kind == "fluid" and row.get("Fluid_Sensitive") != "1")}
-                    if row is None:
-                        arr = None
-                        details["error"] = "missing_plane_metadata"
-                    else:
-                        arr, info = _series_from_disk(study_dir / row[SERIES_ID_COL], size=size, n_centers=n_centers,
-                                                      strategy=center_strategy, lower=center_lower, upper=center_upper)
-                        details.update(info)
-                    if arr is not None and float(arr.max()) <= float(arr.min()):
-                        arr = None
-                        details["error"] = "constant_preprocessed_series"
-                    arrays.append(arr)
-                    masks.append(float(arr is not None))
-                    details["present"] = arr is not None
-                    series_details.append(details)
-                    error = details.get("error")
-                    if error and error not in {"no_dicom_files", "missing_plane_metadata"} and strict_series:
-                        fatal = error
-                        break
-                if fatal:
-                    fail(uid, fatal, series_details=series_details)
-                    continue
-                if sum(masks) < min_present_slots:
-                    fail(uid, "insufficient_decodable_planes", slot_mask=masks, series_details=series_details)
-                    continue
-                reference = next(a for a in arrays if a is not None)
-                volume = np.stack([a if a is not None else np.zeros_like(reference) for a in arrays])
-                meta = {"uid": uid, "shape": list(volume.shape), "dtype": "uint8", "preprocess_version": PREPROCESS_VERSION,
-                        "storage_format": "npz", "shard_filename": f"{uid}.npz",
-                        "preprocess_hash": pp_hash, "preprocess_config": policy, "slot_mask": masks,
-                        "source_hashes": study_sources, "slots": slot_names, "n_centers": n_centers,
-                        "order": next((d.get("order") for d in series_details if d.get("order")), "none"),
-                        "series_details": series_details, "synthetic": False}
+                volume, meta = payload
                 path = write_shard(uid, volume, meta, root=dest, dtype="uint8", storage_format="npz", budget=budget)
                 meta["sha256"] = sha256_file(path)
                 meta["compressed_bytes"] = path.stat().st_size

@@ -152,3 +152,13 @@ def test_legacy_v3_npy_manifest_remains_readable(tmp_path):
     (cache / "manifest.json").write_text(json.dumps(manifest))
     assert manifest_ready(cache / "manifest.json") == (True, "pilot")
     assert load_shard("u1", cache).shape == (3, 1, 3, 8, 8)
+
+
+def test_parallel_build_matches_sequential(tmp_path):
+    csv_path, _ = _study(tmp_path)
+    sequential = _build(tmp_path, csv_path, dest="seq")
+    parallel = _build(tmp_path, csv_path, dest="par", workers=2)
+    a, b = sequential["studies"]["1.2.3"], parallel["studies"]["1.2.3"]
+    assert a["sha256"] == b["sha256"] and a["slot_mask"] == b["slot_mask"]
+    assert sequential["preprocess_hash"] == parallel["preprocess_hash"]
+    assert manifest_ready(tmp_path / "par" / "manifest.json") == (True, "full")
