@@ -47,5 +47,5 @@ def review(candidate,baseline):
  for _ in range(500):
   idx=rng.integers(0,len(y),len(y));d.append(per_class_auc(y[idx],p[0][idx])['macro_auc']-per_class_auc(y[idx],p[1][idx])['macro_auc'])
  gold=recomputed[0]['gold']-recomputed[1]['gold'];weak=recomputed[0]['weak']-recomputed[1]['weak'];low,high=np.percentile(d,[2.5,97.5])
- result={'summary':{'gold_auc':m['macro_auc'],'weak_auc':m['weak_metrics']['macro_auc'],'gold_delta':gold,'weak_delta':weak},'paired_gold_delta_ci95':[float(low),float(high)],'candidate_for_offline_check':gold>=0 and weak>=0.002 and low>=-0.03,'automatic_submission_allowed':False,'note':'Offline runtime/parity proof required; 29-study gold uncertainty is wide.'}
+ result={'summary':{'gold_auc':m['macro_auc'],'weak_auc':m['weak_metrics']['macro_auc'],'gold_delta':gold,'weak_delta':weak},'paired_gold_delta_ci95':[float(low),float(high)],'candidate_for_offline_check':bool(gold>=0 and weak>=0.002 and low>=-0.03),'automatic_submission_allowed':False,'note':'Offline runtime/parity proof required; 29-study gold uncertainty is wide.'}
  (candidate/'review.json').write_text(json.dumps(result,indent=2));return result
