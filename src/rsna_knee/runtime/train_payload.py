@@ -15,6 +15,7 @@ from rsna_knee.errors import LeakageError
 from rsna_knee.hashing import sha256_file, sha256_json
 from rsna_knee.labels.canonical import apply_gold, load_gold_table, normalize_record
 from rsna_knee.ontology import TARGET_COLUMNS
+from rsna_knee.training.loop import NUMERICAL_POLICY_VERSION
 
 
 def resolve_resource(spec: dict[str, Any], job_dir: Path) -> Path | None:
@@ -223,6 +224,11 @@ def prepare_training(job: dict[str, Any], job_dir: Path) -> tuple[dict[str, Any]
         for key in ("epochs", "effective_batch", "microbatch", "seed", "unfreeze_after_steps", "lr_head", "lr_backbone", "profile", "img_size")
         if key in train_cfg
     }
+    identity["numerical_policy"] = NUMERICAL_POLICY_VERSION
+    identity["pooling"] = train_cfg.get("pooling", "mean")
+    identity["pooling_version"] = (
+        "masked-mean.v1" if identity["pooling"] == "mean" else "plane-global-denominator.v1"
+    )
     config_sha = (resources.get("config") or {}).get("sha256")
     return {
         "batches": batches,

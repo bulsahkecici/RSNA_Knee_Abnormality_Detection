@@ -20,6 +20,8 @@ from rsna_knee.models.study import StudyModel
 from rsna_knee.training.checkpoint import torch_load, torch_save
 from rsna_knee.training.losses import torch_masked_bce_parts
 
+NUMERICAL_POLICY_VERSION = "amp-successful-update.v1"
+
 
 def _capture_rng() -> dict[str, Any]:
     state: dict[str, Any] = {
@@ -118,6 +120,8 @@ def train_study_model(
     total_steps = planned_updates(n_studies, epochs, effective_batch)
     epoch = 0
     step = 0
+    attempted_updates = 0
+    skipped_updates = 0
     cursor = 0
     batch_offset = 0
     samples_in_group = 0
@@ -130,6 +134,10 @@ def train_study_model(
             raise RuntimeError("refusing to resume a non-DINOv2 checkpoint")
         if int(blob.get("img_size", img_size)) != img_size:
             raise RuntimeError("image size changed; start a new experiment id")
+        if blob.get("pooling", "mean") != model.pooling:
+            raise RuntimeError("pooling changed; start a new experiment id")
+        if blob.get("pooling_version", model.pooling_version) != model.pooling_version:
+            raise RuntimeError("pooling version changed; start a new experiment id")
         if int(blob.get("effective_batch", effective_batch)) != int(effective_batch):
             raise RuntimeError("effective batch changed; start a new experiment id")
         if input_id is not None and blob.get("input_id") not in {None, input_id}:
@@ -157,6 +165,8 @@ def train_study_model(
             scaler.load_state_dict(blob["scaler"])
         epoch = int(blob["epoch"])
         step = int(blob["step"])
+        attempted_updates = int(blob.get("attempted_updates", step))
+        skipped_updates = int(blob.get("skipped_updates", 0))
         cursor = int(blob.get("cursor", 0))
         batch_offset = int(blob.get("batch_offset", 0))
         samples_in_group = saved_samples
@@ -205,6 +215,8 @@ def train_study_model(
             total_steps=total_steps,
             input_id=input_id,
             config_id=config_id,
+            attempted_updates=attempted_updates,
+            skipped_updates=skipped_updates,
         )
 
     def mark_group() -> None:
@@ -224,6 +236,7 @@ def train_study_model(
 
     def flush() -> None:
         nonlocal step, samples_in_group, weight_acc, supervised_weight, unfrozen, interrupted
+        nonlocal attempted_updates, skipped_updates
         if samples_in_group <= 0:
             return
         if weight_acc <= 0:
@@ -240,17 +253,26 @@ def train_study_model(
             for param in group["params"]:
                 if param.grad is not None:
                     param.grad.div_(denom)
+        attempted_updates += 1
+        updated = True
         if scaler is not None:
+            scale_before = scaler.get_scale()
             scaler.step(opt)
             scaler.update()
+            # GradScaler lowers its scale when nonfinite gradients skip the
+            # optimizer. An unchanged or increased scale means it stepped.
+            updated = scaler.get_scale() >= scale_before
         else:
             opt.step()
         opt.zero_grad(set_to_none=True)
-        sched.step()
-        step += 1
+        if updated:
+            sched.step()
+            step += 1
+        else:
+            skipped_updates += 1
         samples_in_group = 0
         weight_acc = 0.0
-        if unfreeze_after_steps is not None and step >= unfreeze_after_steps and not unfrozen:
+        if updated and unfreeze_after_steps is not None and step >= unfreeze_after_steps and not unfrozen:
             model.unfreeze_last_block()
             params = [p for p in model.encoder.blocks[-1].parameters() if p.requires_grad]
             if params:
@@ -327,6 +349,9 @@ def train_study_model(
         persist()
     return {
         "step": step,
+        "attempted_updates": attempted_updates,
+        "skipped_updates": skipped_updates,
+        "numerical_policy": NUMERICAL_POLICY_VERSION,
         "interrupted": interrupted,
         "microbatch": microbatch,
         "effective_batch": effective_batch,
@@ -359,17 +384,24 @@ def _save(
     total_steps: int,
     input_id: str | None,
     config_id: str | None,
+    attempted_updates: int = 0,
+    skipped_updates: int = 0,
 ) -> None:
     torch_save(
         path,
         {
             "encoder_name": ENCODER_NAME,
+            "pooling": model.pooling,
+            "pooling_version": model.pooling_version,
             "model": {k: v.detach().cpu() for k, v in model.state_dict().items()},
             "optimizer": opt.state_dict(),
             "scheduler": sched.state_dict(),
             "scaler": None if scaler is None else scaler.state_dict(),
             "epoch": epoch,
             "step": step,
+            "attempted_updates": attempted_updates,
+            "skipped_updates": skipped_updates,
+            "numerical_policy": NUMERICAL_POLICY_VERSION,
             "cursor": cursor,
             "batch_offset": batch_offset,
             "order": list(order),

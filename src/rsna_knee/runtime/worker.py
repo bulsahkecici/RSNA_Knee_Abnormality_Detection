@@ -106,11 +106,13 @@ def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str,
         return "unverified_weights", {"kind": "unavailable", "macro_auc": None, "notes": "pretrained flag without official hash"}, []
     out_path = resolve_checkpoint_out(job, job_dir)
     before = sha256_file(out_path) if out_path.is_file() else None
-    model = StudyModel(encoder, freeze_encoder=True)
+    model = StudyModel(encoder, freeze_encoder=True, pooling=train_cfg.get("pooling", "mean"))
     trained = train_study_model(
         model,
         payload["batches"],
         epochs=int(train_cfg.get("epochs", 1)),
+        lr_head=float(train_cfg.get("lr_head", 1e-3)),
+        lr_backbone=float(train_cfg.get("lr_backbone", 1e-5)),
         effective_batch=int(train_cfg.get("effective_batch", 1)),
         microbatch=int(train_cfg.get("microbatch", 1)),
         seed=int(train_cfg.get("seed", 0)),
@@ -138,6 +140,10 @@ def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str,
         scope=payload["scope"],
     )
     eval_metrics["steps"] = trained["step"]
+    eval_metrics["pooling"] = model.pooling
+    eval_metrics["pooling_version"] = model.pooling_version
+    for key in ("attempted_updates", "skipped_updates", "numerical_policy", "updates_planned"):
+        eval_metrics[key] = trained.get(key)
     eval_metrics["supervised_weight"] = trained.get("supervised_weight")
     eval_metrics["phase"] = train_cfg.get("phase")
     eval_metrics["resumed"] = bool(train_cfg.get("resume"))

@@ -41,3 +41,12 @@ Documented on overview (formula with Benchmark, maxAUC, RuntimeSeconds/32400). N
 ## Refresh evidence — 2026-10-03
 
 Official pages, host discussion, and live limits were refreshed into `state/competition-intel-20261003/`. Data description explicitly uses `train_series/` and `test_series/`; inference was corrected to those directories. Evaluation column order, offline code requirements, and final deadline match the prior snapshot. No complete training-data conversion is required merely to submit a valid trained pilot.
+
+
+## Official refresh — 2026-10-09
+
+Read-only competition-researcher agent verified Evaluation, Timeline, Code Requirements, Rules, Data and host discussion 733343 through authenticated Kaggle CLI. Public leaders 0.964, top 20 at least 0.960; our confirmed submission 56973673 is 0.740. Exact user rank is unmeasured, public ranking does not establish private final standing.
+
+GPU quota: 22.62h remaining /30h; API refresh timestamp 2026-10-10T00:00:00 has unspecified timezone. Submission API: 1 today, 4 remaining, daily limit 5 and two final selections. Final deadline 2026-10-22 23:59 UTC (2026-10-23 02:59 Europe/Istanbul). Entry/team deadline 2026-10-15 23:59 UTC. Runtime remains <=9h, Internet disabled, submission.csv, macro AUC across all12 targets. About1300 hidden studies is approximate official data-page information.
+
+Sources: https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/overview/evaluation ; https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/overview/timeline ; https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/overview/code-requirements ; https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/rules ; https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/leaderboard ; https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/discussion/733343

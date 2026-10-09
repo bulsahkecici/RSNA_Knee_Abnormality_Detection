@@ -169,3 +169,23 @@ Kaggle submission 56973673 COMPLETE, public score 0.740 confirmed by API (previo
 
 ### seed 2047 and ensemble decision
 Second seed COMPLETE, real gold AUC 0.74756610; seed 2026 0.75068253. Equal probability average 0.74832980. Weak AUCs 0.77553664 / 0.77612742 / ensemble 0.77576533. Exact prediction UID alignment and finite values checked. Do not replace public 0.740 model or submit ensemble: no validation improvement. Autonomous local poller started (60 seconds, macOS notifications on change and hourly), auto-collection and comparison enabled. No automatic OS reboot startup.
+
+
+### Autonomous round expanded with structural experiment
+Live duration8 kernel confirmed QUEUED, receipt retained. Plane-concat head implemented with function-preserving mean checkpoint conversion; checkpoint/evaluation/offline pooling identities persisted, legacy default mean preserved. 18 combined focused tests passed; agent reports 20 targeted model tests and Ruff passed. Queue: duration8, headlr3e4, plane, strictly sequential within12 observedGPUhours/24wallhours. Reviewed candidates require nonnegative gold delta, weak delta>=0.002, paired gold lower CI>=-0.03, then real internet-disabled30-study runtime/CSV validation before a single submission. Unknown receipts require reconciliation. At quota refresh new jobs stop for accounting. No new score claimed.
+
+
+### Autonomous candidate gate hardening
+All gold and weak probabilities are checked for finite [0,1] values, unique UIDs and disjoint validation splits. Macro AUCs are recomputed with numeric masks and compared to stored metrics; undefined targets fail promotion. Twelve gate/publication tests passed, and actual champion predictions reproduced both reported metrics under the strengthened review. Duration8 still live QUEUED; no remote restart or new metric claimed.
+
+
+### Six-center coverage preparation
+Existing v3 manifest has12657 present series, median30 slices, nine unique decoded slices each with3 centers. Six interior centers cover mean17.71257 distinct slices; uint8 image payload estimate11.431GB versus5.716GB (not actual output yet). Same4219 requested studies, labels/folds/source identity, private CPU kernel rsna-v3-sixcenters-cache-20261009 v1 acknowledged and confirmed RUNNING. Existing GPU duration8 remains QUEUED. Auxiliary local watcher will automatically launch a small-output CPU verification bridge after completion, checking every shard hash, shape [3,6,3,224,224], dtype and masks. No Mac MRI download, no new AUC claimed, no GPU quota charged for CPU cache.
+
+
+### Versioned inference policy
+Live duration8 transitioned QUEUED→RUNNING; six-center CPU cache remains RUNNING. Offline inference now takes a versioned preprocess-config asset and resolves center count from it, rejects conflicting explicit counts, unsupported pixel policy and mismatching cache/preprocess/DICOM source hashes. Candidate packaging includes that configuration. Legacy default3-center path remains supported; six-center future candidates cannot silently score with3 centers. Sixteen policy+pooling tests and Ruff passed. No new AUC or public score available yet.
+
+
+### Full regression verification
+Full pytest suite exit0 after numerical-policy, pooling, autonomous gates and inference-policy changes. Only existing invalid synthetic-fixture DICOM UID warnings. Local controller heartbeats confirmed fresh while both duration8 GPU training and six-center CPU cache were live RUNNING; no restart/reupload on observation delays. No new training metrics available yet.

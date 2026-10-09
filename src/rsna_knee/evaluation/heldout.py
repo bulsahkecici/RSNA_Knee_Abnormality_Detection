@@ -37,7 +37,10 @@ def load_trained_study(checkpoint: Path, img_size: int, device: torch.device | N
         raise RuntimeError("checkpoint has no optimizer update")
     if int(blob.get("img_size", img_size)) != img_size:
         raise RuntimeError("checkpoint image size does not match the cache")
-    model = StudyModel(Dinov2ViTS14(img_size=img_size), freeze_encoder=True)
+    model = StudyModel(Dinov2ViTS14(img_size=img_size), freeze_encoder=True,
+                       pooling=blob.get("pooling", "mean"))
+    if blob.get("pooling_version", model.pooling_version) != model.pooling_version:
+        raise RuntimeError("checkpoint pooling version is unsupported")
     model.load_state_dict(blob["model"])
     saved_head = blob["model"]["head.weight"]
     if not torch.equal(model.head.weight.detach().cpu(), saved_head.detach().cpu()):
