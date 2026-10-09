@@ -587,3 +587,45 @@ def build_cache(*, series_csv, dicom_root, dest, study_ids=None, limit=None, siz
     if budget_error:
         raise CacheBudgetExceeded(budget_error)
     return {**manifest, "manifest_sha256": sha256_file(dest / "manifest.json"), "path": str(dest / "manifest.json")}
+
+
+def merge_cache_parts(parts: list[Path], dest: Path, *, move: bool = True) -> dict[str, Any]:
+    """Combine shard caches built with one policy into a single directory and manifest.
+
+    Every part must carry the same preprocess hash and policy, and requested UIDs
+    must be disjoint. Shards are moved (or copied) next to the merged manifest, so
+    ``manifest_ready`` then re-verifies every shard hash, mask and shape.
+    """
+    import shutil
+
+    manifests = [json.loads((part / "manifest.json").read_text()) for part in parts]
+    if not manifests:
+        raise ValueError("no cache parts")
+    first = manifests[0]
+    for m in manifests:
+        if m["preprocess_hash"] != first["preprocess_hash"] or m["preprocess_config"] != first["preprocess_config"]:
+            raise ValueError("cache parts use different preprocessing policies")
+        if m.get("budget_error"):
+            raise ValueError("cache part stopped on its byte budget")
+    requested = [uid for m in manifests for uid in m["requested_uids"]]
+    if len(requested) != len(set(requested)):
+        raise ValueError("cache parts overlap")
+    dest.mkdir(parents=True, exist_ok=True)
+    studies, quarantine = {}, {}
+    for part, m in zip(parts, manifests, strict=True):
+        for uid in m["studies"]:
+            for suffix in ("npz", "json"):
+                source, target = part / f"{uid}.{suffix}", dest / f"{uid}.{suffix}"
+                if source.resolve() != target.resolve():
+                    (shutil.move if move else shutil.copy2)(source, target)
+        studies.update(m["studies"])
+        quarantine.update(m["quarantine"])
+    merged = {**first, "studies": studies, "quarantine": quarantine, "n_studies": len(studies),
+              "n_quarantine": len(quarantine), "requested_uids": requested, "n_requested": len(requested),
+              "compressed_byte_total": compressed_byte_total(dest),
+              "max_cache_bytes": sum(m["max_cache_bytes"] for m in manifests),
+              "requested_complete": set(studies) == set(requested) and not quarantine,
+              "merged_from": [{"manifest_sha256": sha256_json(m), "n_studies": m["n_studies"]} for m in manifests],
+              "coverage": _coverage(studies, quarantine, [tuple(s) for s in first["preprocess_config"]["slots"]])}
+    _atomic_json(dest / "manifest.json", merged)
+    return merged

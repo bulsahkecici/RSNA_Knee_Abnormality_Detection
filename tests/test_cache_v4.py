@@ -178,3 +178,23 @@ def test_series_intensity_window_preserves_between_slice_contrast(tmp_path):
     # per-slice normalization erases it.
     assert window[0].mean() < window[1].mean() < window[2].mean()
     assert abs(flat[0].mean() - flat[2].mean()) < 1.0
+
+
+def test_shard_parts_merge_into_one_verified_manifest(tmp_path):
+    from rsna_knee.data.cache_build import merge_cache_parts
+
+    csv_a, _ = _study(tmp_path, study="1.2.3")
+    _study(tmp_path / "b", study="1.2.4")
+    # second study lives in another DICOM root; build each part from its own CSV/root
+    _build(tmp_path, csv_a, dest="part0", slots=PILOT_SLOTS)
+    build_cache(series_csv=tmp_path / "b" / "train_series.csv", dicom_root=tmp_path / "b" / "dicom",
+                    dest=tmp_path / "part1", size=28, n_centers=12, slots=PILOT_SLOTS)
+    merged = merge_cache_parts([tmp_path / "part0", tmp_path / "part1"], tmp_path / "merged")
+    assert merged["n_studies"] == 2 and set(merged["requested_uids"]) == {"1.2.3", "1.2.4"}
+    assert manifest_ready(tmp_path / "merged" / "manifest.json") == (True, "full")
+    with pytest.raises(ValueError, match="overlap"):
+        merge_cache_parts([tmp_path / "merged", tmp_path / "merged"], tmp_path / "again", move=False)
+    other = _build(tmp_path, csv_a, dest="other", slots=STRUCTURAL_SLOTS)
+    assert other["n_studies"] == 1
+    with pytest.raises(ValueError, match="policies"):
+        merge_cache_parts([tmp_path / "merged", tmp_path / "other"], tmp_path / "bad", move=False)

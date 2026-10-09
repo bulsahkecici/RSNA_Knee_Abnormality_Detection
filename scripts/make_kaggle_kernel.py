@@ -18,6 +18,7 @@ import base64
 import hashlib
 import io
 import json
+import re
 import subprocess
 import tarfile
 from pathlib import Path
@@ -54,15 +55,29 @@ def git_identity(ref: str) -> dict:
             "worktree_dirty_ignored": bool(dirty)}
 
 
-def generate(entry: str, slug: str, *, internet: bool, gpu: bool, ref: str = "HEAD") -> Path:
+def apply_defines(template: str, defines: dict[str, object]) -> str:
+    """Replace template lines ``NAME = ...  # define`` with generator-supplied Python literals."""
+    for name, value in defines.items():
+        pattern = re.compile(rf"^{re.escape(name)} = .*  # define$", re.M)
+        if len(pattern.findall(template)) != 1:
+            raise SystemExit(f"template has no unique definable constant {name!r}")
+        line = f"{name} = {value!r}  # define"
+        template = pattern.sub(lambda _, line=line: line, template)
+    return template
+
+
+def generate(entry: str, slug: str, *, internet: bool, gpu: bool, ref: str = "HEAD",
+             defines: dict[str, object] | None = None) -> Path:
     template = _git("show", f"{ref}:scripts/kaggle_entries/{entry}.py").decode()
     for marker in MARKERS:
         if template.count(marker) != 1:
             raise SystemExit(f"template must contain {marker!r} exactly once")
+    template = apply_defines(template, defines or {})
     archive, names = source_archive(ref)
     sha = hashlib.sha256(archive).hexdigest()
     info = {"entry": entry, "slug": slug, "source_sha256": sha, "n_source_files": len(names),
-            "template_sha256": hashlib.sha256(template.encode()).hexdigest(), **git_identity(ref)}
+            "template_sha256": hashlib.sha256(template.encode()).hexdigest(), "defines": defines or {},
+            **git_identity(ref)}
     text = (template.replace(MARKERS[0], f"SOURCE_B64 = {base64.b64encode(archive).decode()!r}")
             .replace(MARKERS[1], f"SOURCE_SHA256 = {sha!r}")
             .replace(MARKERS[2], f"BUILD_INFO = {info!r}"))
@@ -85,8 +100,14 @@ def main() -> None:
     parser.add_argument("--no-internet", action="store_true")
     parser.add_argument("--gpu", action="store_true")
     parser.add_argument("--ref", default="HEAD", help="git ref whose committed src and template are packaged")
+    parser.add_argument("--define", action="append", default=[], metavar="NAME=LITERAL",
+                        help="override a template constant marked '# define' with a Python literal")
     args = parser.parse_args()
-    folder = generate(args.entry, args.slug, internet=not args.no_internet, gpu=args.gpu, ref=args.ref)
+    defines = {}
+    for item in args.define:
+        name, _, literal = item.partition("=")
+        defines[name] = ast.literal_eval(literal)
+    folder = generate(args.entry, args.slug, internet=not args.no_internet, gpu=args.gpu, ref=args.ref, defines=defines)
     print(json.dumps(json.loads((folder / "build.json").read_text()) | {"files": "...", "folder": str(folder)}))
 
 
