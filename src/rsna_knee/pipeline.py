@@ -282,7 +282,10 @@ def stage_labels(
     resume: bool = True,
     development_only: bool = False,
     progress: Callable[[dict[str, Any]], None] | None = None,
+    gold_measurement: bool = False,
 ) -> PipelineState:
+    if development_only and gold_measurement:
+        raise ValueError("development_only and gold_measurement are mutually exclusive")
     roots = _roots(state)
     rows: list[dict[str, Any]] = []
     if state.synthetic:
@@ -377,6 +380,13 @@ def stage_labels(
             gold = {r["StudyInstanceUID"] for r in folds if r.get("is_gold") == "1"}
             reader = [r for r in reader if r["StudyInstanceUID"] in allowed - gold]
             state.artifacts["label_selection"] = "non_gold_development_only"
+        elif gold_measurement:
+            # Extractor-quality measurement only: gold labels override these rows in training
+            # and gold images never enter image training.
+            folds = load_folds(roots.state / "folds.csv")
+            gold = {r["StudyInstanceUID"] for r in folds if r.get("is_gold") == "1"}
+            reader = [r for r in reader if r["StudyInstanceUID"] in gold]
+            state.artifacts["label_selection"] = "gold_extractor_measurement_only"
         done = 0
         attempted = 0
         rejected = 0

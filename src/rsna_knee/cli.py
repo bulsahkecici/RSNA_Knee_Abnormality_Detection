@@ -126,6 +126,8 @@ def labels_pilot(
     run_id: str | None = typer.Option(None, "--run-id"),
     development_only: bool = typer.Option(False, "--development-only"),
     progress_file: Path | None = typer.Option(None, "--progress-file"),
+    gold_measurement: bool = typer.Option(False, "--gold-measurement",
+                                          help="Extract gold reports only, to measure extractor agreement"),
 ) -> None:
     ensure_runtime_dirs()
     registry = Registry()
@@ -142,6 +144,7 @@ def labels_pilot(
         state, registry, limit=limit, live=live, resume=resume,
         development_only=development_only,
         progress=report_progress,
+        gold_measurement=gold_measurement,
     )
     registry.upsert_run(state.run_id, state.profile, state.stage, state.model_dump(), state.synthetic)
     _print_labels(state, live)
@@ -155,7 +158,8 @@ def labels_run(
     development_only: bool = typer.Option(False, "--development-only"),
     progress_file: Path | None = typer.Option(None, "--progress-file"),
 ) -> None:
-    labels_pilot(limit=10**9, live=live, resume=resume, run_id=run_id, development_only=development_only, progress_file=progress_file)
+    labels_pilot(limit=10**9, live=live, resume=resume, run_id=run_id, development_only=development_only,
+                 progress_file=progress_file, gold_measurement=False)
 
 
 @cache_app.command("pilot")

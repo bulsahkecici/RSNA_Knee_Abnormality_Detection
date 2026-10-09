@@ -137,6 +137,69 @@ def create_folds(
     return payload
 
 
+GOLD_SET_HISTORIC_EVAL = "A_historic_eval"
+GOLD_SET_FORMER_TRAIN = "B_former_train"
+
+
+def derive_all_gold_holdout(source: Path, dest: Path, *, provenance: dict[str, str] | None = None) -> dict[str, Any]:
+    """Hold every gold study out of image training while keeping fold assignments.
+
+    Fold numbers and duplicate groups are copied unchanged, so outer-fold results
+    stay comparable with the source split. ``gold_set`` records which gold studies
+    were the historic eval set (used repeatedly for model selection) and which were
+    previously trained on; neither is an unseen test set for earlier models.
+    """
+    rows = load_folds(source)
+    assert_group_integrity(rows)
+    out = []
+    for row in rows:
+        new = dict(row)
+        new["gold_set"] = {"eval": GOLD_SET_HISTORIC_EVAL, "train_image_ok": GOLD_SET_FORMER_TRAIN}.get(row["gold_split"], "")
+        if new["gold_set"]:
+            new["gold_split"] = "eval"
+        out.append(new)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".csv.tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["StudyInstanceUID", "fold", "is_gold", "gold_split", "group_id", "gold_set"])
+        writer.writeheader()
+        writer.writerows(out)
+    tmp.replace(dest)
+    assert_group_integrity(out)
+    trainable = set(image_training_uids(out))
+    gold = [r for r in out if r["gold_set"]]
+    gold_groups = {r["group_id"] for r in gold}
+    if trainable & {r["StudyInstanceUID"] for r in gold}:
+        raise LeakageError("gold study left in image training")
+    folds_n: dict[str, dict[str, int]] = defaultdict(lambda: {"trainable": 0, "gold": 0, "dropped_group_member": 0})
+    for row in out:
+        bucket = folds_n[row["fold"]]
+        if row["gold_set"]:
+            bucket["gold"] += 1
+        elif row["StudyInstanceUID"] in trainable:
+            bucket["trainable"] += 1
+        else:
+            bucket["dropped_group_member"] += 1
+    sizes: dict[str, int] = defaultdict(int)
+    for row in out:
+        sizes[row["group_id"]] += 1
+    payload = {
+        "path": str(dest), "version": "folds-v2-allgold", "source": str(source), "source_sha256": sha256_file(source),
+        "hash": sha256_file(dest), "n_studies": len(out), "n_trainable": len(trainable),
+        "n_gold_heldout": len(gold),
+        "gold_sets": {name: sum(r["gold_set"] == name for r in gold) for name in (GOLD_SET_HISTORIC_EVAL, GOLD_SET_FORMER_TRAIN)},
+        "gold_groups_with_other_members": sum(sizes[g] > 1 for g in gold_groups),
+        "duplicate_groups": sum(n > 1 for n in sizes.values()),
+        "studies_in_duplicate_groups": sum(n for n in sizes.values() if n > 1),
+        "per_fold": dict(sorted(folds_n.items())), "provenance": provenance or {},
+        "patient_cv_guaranteed": False,
+        "note": ("All 58 gold studies excluded from image training. Both gold sets influenced earlier "
+                 "model selection or training; report them separately and never as an unseen test set."),
+    }
+    dest.with_suffix(".json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return payload
+
+
 def load_folds(path: Path | None = None) -> list[dict[str, str]]:
     path = path or (STATE_DIR / "folds.csv")
     with path.open(newline="", encoding="utf-8") as handle:
