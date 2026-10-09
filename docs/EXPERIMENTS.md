@@ -270,3 +270,33 @@ Median slice spacing 3.3 mm sagittal, 3.6 coronal, 3.85 axial; 12 sagittal windo
 **Folds v2 (all-gold holdout)** — `state/folds-v2-allgold.csv`, sha256 `e27530d2…`, derived from folds v1 (`f13720c5…`) with identical fold numbers and duplicate groups. All 58 gold studies are held out of image training: set A = 29 historic eval (repeatedly used for selection), set B = 29 formerly trained on. 4348 trainable studies; one duplicate-group member of a gold study is also dropped. Neither gold set is an unseen test set for earlier models.
 
 **Numeric label audit** (`scripts/label_audit.py`, local, numeric fields only; aggregates in `state/label-audit/20261009.json`). Public CC0 label sets (stevenleehans full/v2/v4_blend, yunusgmsoy; hashes recorded) vs the 58 gold: macro AUC 0.878 / 0.887 / 0.893 / 0.880 — our measurement; those authors may also have tuned on the same gold. Weakest targets for every source: Synovitis (0.68–0.79), Lateral OA (~0.83), Fracture (0.79–0.88). Against our local extraction, explicit states agree closely (AUC of public score vs our explicit positive/negative 0.976–0.997). Public sources score our `not_mentioned` low (mean ≈0.18–0.27), but score `borderline_negative_hint` high for OA, Effusion, Baker's and Synovitis (mean 0.79–0.90), i.e. the main ontology disagreement is the host-borderline rule, not extraction. Largest raw disagreements: Lateral/Medial Meniscus (ours negative, public ≥0.8: 122 / 103), Contusion and ACL (ours positive, public ≤0.2: 81 / 74). Our extraction was never run on gold reports, so our own gold agreement is unknown; a gold-only local extraction (`rsna labels pilot --live --gold-measurement`, run `labels-goldmeasure-20261009`) is running for measurement only — gold labels override these rows and gold images never enter image training.
+
+### 2026-10-10 — Our extractor vs gold; D1 cache complete; D0/D1/L1 prepared
+
+**Our local extraction measured on gold reports for the first time** (`rsna labels pilot --live --gold-measurement`, run `labels-goldmeasure-20261009`, Qwen 27B local, 57/58 valid, 1 truncated response quarantined; measurement only — these rows never become training targets). Macro AUC against gold under state→score policies (`scripts/label_audit.py --tag 20261010`, `state/label-audit/20261010.json`):
+
+| Label source | Macro AUC vs gold (57–58 studies) |
+|---|---:|
+| Ours as used in training (masked targets dropped) | 0.804 |
+| Ours, unmentioned scored 0.25, uncertain 0.5 | 0.838 |
+| Ours, additionally borderline-negative scored 0.5 | 0.841 |
+| Public stevenleehans v4_blend / yunusgmsoy (CC0) | 0.893 / 0.880 |
+
+Main error is positive precision against the host's high-grade criteria: of our `criterion_positive` calls, gold is positive for ACL 0.77, MCL 0.56, Medial OA 0.62, Lateral OA 0.53, Effusion 0.74, Contusion 0.58, Synovitis 0.79. Hard binary labels also discard severity ranking that the public probability scales retain. The previous image model's gold AUC (0.795) is close to our training labels' own gold agreement (0.804), consistent with — not proof of — labels being the binding constraint. Small sample; the same gold studies were used for earlier selection.
+
+**Decision:** promote L1 ahead of P3. Pre-registered soft table `state/soft-labels/public-mean-v1.jsonl` (sha `7d045805…`): equal mean of one CC0 table per author (stevenleehans v4_blend, yunusgmsoy), all 58 gold studies removed, fixed before any image result. Evaluation targets stay the fixed hard masked labels; weak AUC therefore measures agreement with our labels and is not decisive for L1.
+
+**D1 cache complete** — `bulsahkecici/rsna-v4-dense12-cache-20261009` v1: 4407/4407 studies, 0 quarantine, all three fluid planes present in every study (fallbacks: sagittal 257, coronal 159), all series IOP×IPP ordered, 15.0 GiB, build 70 min on 4 workers, every shard re-hashed in-kernel (508 s). Manifest sha256 `171ef4ff…`, preprocess hash `acdd5baa…`. The shard images stay on Kaggle; only summaries were downloaded (Kaggle API returned HTTP 429 when listing the full output with default 20-item pages; `--page-size 200` with a file pattern worked).
+
+**High-resolution policy pilot** — `bulsahkecici/rsna-policy-pilot-hires-20261009` v1, 64 studies, 5 slots × 12 windows, 154 mm crop, series intensity window, 0 quarantine both configs:
+
+| Policy | s/study (4 workers) | NPZ MB | PNG MB | JPEG q95 MB (max err 9–10) | NPZ for 4219 |
+|---|---:|---:|---:|---:|---:|
+| 384 px (0.40 mm/px) | 2.54 | 15.4 | 10.1 | 5.7 | 60 GiB |
+| 256 px (0.60 mm/px) | 1.42 | 7.1 | 4.9 | 2.9 | 27.8 GiB |
+
+No lossless option fits one 18 GiB kernel output. Next coverage cache: 256 px / 154 mm / 5 slots / series window / NPZ in two shards merged by `merge_cache_parts` (commit ae4809e); 384 px only if 256 px shows a gain.
+
+**Training code** (commit d90acbf, model agent; session ended during lint, all tests pass): window sampling, unfreeze depth incl. full backbone with layer decay, official-pretrained init, ConvNeXt-T / CoAtNet-0 via sha-verified timm checkpoints, soft targets for training only, window-token transformer, evaluation-only anatomical TTA, run identity and timing/memory metrics. Experiment configs D0–D5, C1, C2, L1 pass `validate_arm` (declared changes equal actual differences vs control). A local end-to-end rehearsal of D1 and L1 (synthetic DICOM → v4 cache → build_job/run_job with official DINOv2 weights) finished `ok` with the expected label source in metrics.
+
+**Prepared Colab notebooks** (gitignored, embed private numeric labels): `notebooks/generated/D0.ipynb` (v3 six-center cache, official init), `D1.ipynb` (dense 12-window cache), `L1.ipynb` (D1 + public soft labels). All pin git `963c8b5`, folds-v2 `e27530d2…`, 3341 train UIDs, official DINOv2 `b938bf1b…`; outputs and checkpoints on Drive with resume. Results are ingested with `scripts/review_experiment.py <ID> --zip <colab-results.zip>`, which re-verifies every pinned hash and the folds-v2 leakage check and reports gold-all / gold-A / gold-B / weak plus paired deltas vs the control arm. No result exists yet for any of these arms.
