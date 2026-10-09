@@ -189,3 +189,23 @@ Live duration8 transitioned QUEUED→RUNNING; six-center CPU cache remains RUNNI
 
 ### Full regression verification
 Full pytest suite exit0 after numerical-policy, pooling, autonomous gates and inference-policy changes. Only existing invalid synthetic-fixture DICOM UID warnings. Local controller heartbeats confirmed fresh while both duration8 GPU training and six-center CPU cache were live RUNNING; no restart/reupload on observation delays. No new training metrics available yet.
+
+### Autonomous round: verified results and submission
+
+All three real training jobs completed. Independent review recomputed masked AUCs, checked finite probabilities and split identities, and confirmed gold studies excluded from training. Compared with the four-epoch fine-tuned reference:
+
+| Experiment | Gold AUC (29 studies) | Weak AUC (824 studies) | Gold delta | Weak delta | Offline candidate gate |
+| --- | --- | --- | --- | --- | --- |
+| duration8 | 0.75701531 | 0.78355471 | +0.00633278 | +0.00742729 | Passed |
+| headlr3e4 | 0.74929965 | 0.77691960 | -0.00138288 | +0.00079219 | Failed |
+| plane | 0.75133385 | 0.77867027 | +0.00065132 | +0.00254285 | Passed |
+
+Duration8 was selected by weak holdout AUC among qualified candidates. Its paired gold delta 95% bootstrap interval is [-0.00582903, 0.02033794]; the small gold set does not establish a statistically clear improvement. Observed GPU quota use across these jobs was 1.31 hours. Evidence: `state/campaigns/autonomous-20261009/status.json` and downloaded prediction artifacts.
+
+The first duration8 offline kernel failed because its integrity manifest included `.DS_Store`, which Kaggle removed. Packaging now excludes hidden files and Python cache files. Corrected private asset version 2 and offline kernel version 2 completed. The real 30-study benchmark took 44.602 seconds; projecting to 1300 studies gives approximately 32 minutes, an estimate rather than a hidden-test runtime guarantee. Visible-test CSV validation passed. Kaggle submission receipt **56995656** is confirmed PENDING; no new public score is available. The scored reference remains receipt **56973673**, public **0.740**.
+
+### Verified six-center cache and controlled training
+
+The CPU cache and subsequent independent verification kernel completed. All 4219 studies have three planes, uint8 shards of shape [3,6,3,224,224], and zero quarantine; verification checked every shard hash, masks and nonconstant present planes. Cache manifest SHA256: `8a2332466bd15b955eda61acc7e0e46792cc503e8b484f4cb19c5bbe116de87a`. Payload totals 11,431,397,376 bytes. MRI shards remain remote.
+
+Private kernel `bulsahkecici/rsna-auto-20261009-sixcenter-finetune` version 1 is confirmed RUNNING. It uses the same frozen initialization, eight epochs, learning rates, seed, folds and numeric labels as duration8, changing coverage from three to six centers. This is a new warm-start experiment with reset optimizer/scheduler, not a strict checkpoint resume. Its controller reviews against the stronger duration8 baseline and packages the six-center preprocessing policy only if the candidate passes. No six-center metrics or competition submission exist yet.
