@@ -117,6 +117,7 @@ def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str,
         microbatch=int(train_cfg.get("microbatch", 1)),
         seed=int(train_cfg.get("seed", 0)),
         unfreeze_after_steps=train_cfg.get("unfreeze_after_steps"),
+        unfreeze_blocks=train_cfg.get("unfreeze_blocks", 1),
         interrupt_after_steps=train_cfg.get("interrupt_after_steps"),
         ckpt_path=out_path,
         resume=bool(train_cfg.get("resume")) and out_path.is_file(),
@@ -124,9 +125,19 @@ def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str,
         config_id=payload["config_id"],
     )
     after = sha256_file(out_path) if out_path.is_file() else None
-    if float(trained.get("supervised_weight") or 0) <= 0 or trained["step"] < 1 or after is None or (after == before and not train_cfg.get("resume")):
-        reason = "no_supervision" if float(trained.get("supervised_weight") or 0) <= 0 else "no_checkpoint"
-        return reason, {"kind": "unavailable", "macro_auc": None, "notes": reason, "supervised_weight": trained.get("supervised_weight")}, []
+    has_supervision = float(trained.get("supervised_weight") or 0) > 0
+    # A completed, identity-verified legacy checkpoint may have no cumulative
+    # supervision counter. Re-evaluation does not require new optimizer updates.
+    completed_resume = bool(trained.get("validated_completed_resume")) and supervised > 0
+    if (not has_supervision and not completed_resume) or trained["step"] < 1 or after is None or (after == before and not train_cfg.get("resume")):
+        reason = "no_supervision" if not has_supervision and not completed_resume else "no_checkpoint"
+        return reason, {"kind": "unavailable", "macro_auc": None, "notes": reason,
+                        "supervised_weight": trained.get("supervised_weight"),
+                        "resume_validation": trained.get("resume_validation"),
+                        "epochs_completed": trained.get("epochs_completed"),
+                        "steps": trained.get("step"), "updates_planned": trained.get("updates_planned"),
+                        "attempted_updates": trained.get("attempted_updates"),
+                        "skipped_updates": trained.get("skipped_updates")}, []
     from rsna_knee.evaluation.heldout import evaluate_checkpoint
 
     metrics_path = job_dir / "metrics.json"
@@ -147,6 +158,7 @@ def _finish_training(job: dict[str, Any], job_dir: Path) -> tuple[str, dict[str,
     eval_metrics["supervised_weight"] = trained.get("supervised_weight")
     eval_metrics["phase"] = train_cfg.get("phase")
     eval_metrics["resumed"] = bool(train_cfg.get("resume"))
+    eval_metrics["completed_resume_evaluation"] = completed_resume
     eval_metrics["weights_official"] = bool(trust["official"])
     eval_metrics["weights_reason"] = trust["reason"]
     eval_metrics["train_uids"] = payload["train_uids"]

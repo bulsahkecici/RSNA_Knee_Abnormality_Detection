@@ -1,0 +1,17 @@
+id,priority,hypothesis,prerequisite,max_full_runs,status
+P0,0,"Fixed grouped folds; real dense-cache pilot; numeric-label disagreement audit","No raw reports leave local machine",0,planned
+REF,0,"Reproduce one eligible public reader as REFERENCE","Version license training-origin and overlap audit",0,planned
+MED1,1,"Knee-pretrained OrthoFoundation frozen features complement generic DINO","Artifact availability upstream terms and external-data eligibility unresolved",0,conditional_probe
+MED2,1,"RadImageNet frozen features provide medical-CNN diversity","Artifact terms preprocessing and overlap audit",0,planned_probe
+D0,1,"New clean sparse DINO baseline under revised gold exclusion","P0 and official unsupervised initialization",1,planned
+D1,1,"Denser three-series image coverage improves learning","D0 and real dense cache QC",1,planned
+D2,1,"Two additional structural series improve dense model","D1 and series-selection audit",1,planned
+D3,2,"Four trainable DINO blocks improve domain adaptation","Best coverage recipe; same split and targets",1,planned
+D4,2,"Full DINO adaptation improves over partial fine-tuning","Memory/time pilot and staged learning rates",1,planned
+D5,2,"Finding attention helps with dense variable windows","Best coverage and matched mean baseline",1,planned
+C1,2,"ConvNeXt-Tiny learns complementary local evidence","Same labels windows split; independent pretrained initialization",1,planned
+C2,2,"CoAtNet-0/1 learns stronger window representations","Same labels windows split; resource pilot",1,planned
+CV,3,"Best two families improve consistently across three outer folds","P1/P2 finished; independent fold initializations",4,conditional
+L1,3,"Audited alternative numeric supervision improves best recipe","Original validation targets frozen; masks preserved",1,conditional
+T1,4,"Inner-crossfit image teachers improve student on outer holdout","Exclude outer validation from every teacher; version soft targets",4,conditional
+ALT,4,"Best medical encoder or patch summary adds useful diversity","MED probes or current-model feature audit supports benefit",1,conditional

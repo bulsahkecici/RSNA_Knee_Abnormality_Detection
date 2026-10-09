@@ -85,10 +85,11 @@ def _slice_batch(batch: dict[str, torch.Tensor], start: int, end: int) -> dict[s
 
 
 def _optimizer(model: StudyModel, lr_head: float, lr_backbone: float, unfrozen: bool) -> torch.optim.AdamW:
-    head_params = [p for p in model.head.parameters() if p.requires_grad]
+    head_params = [p for name, p in model.named_parameters()
+                   if not name.startswith("encoder.") and p.requires_grad]
     groups: list[dict[str, Any]] = [{"params": head_params, "lr": lr_head}]
     if unfrozen:
-        block = [p for p in model.encoder.blocks[-1].parameters() if p.requires_grad]
+        block = [p for p in model.encoder.parameters() if p.requires_grad]
         if block:
             groups.append({"params": block, "lr": lr_backbone})
     return torch.optim.AdamW(groups, weight_decay=0.05)
@@ -108,6 +109,7 @@ def train_study_model(
     resume: bool = False,
     interrupt_after_steps: int | None = None,
     unfreeze_after_steps: int | None = None,
+    unfreeze_blocks: int = 1,
     device: str | None = None,
     oob_once: bool = False,
     input_id: str | None = None,
@@ -128,6 +130,9 @@ def train_study_model(
     order: list[int] | None = None
     img_size = model.img_size
     unfrozen = False
+    validated_completed_resume = False
+    resume_validation: dict[str, bool] = {}
+    previous_supervised_weight = 0.0
     if resume and ckpt_path and ckpt_path.exists():
         blob = torch_load(ckpt_path, map_location="cpu")
         if blob.get("encoder_name") != ENCODER_NAME:
@@ -144,13 +149,15 @@ def train_study_model(
             raise RuntimeError("input identity changed; refusing resume")
         if config_id is not None and blob.get("config_id") not in {None, config_id}:
             raise RuntimeError("config identity changed; refusing resume")
+        if int(blob.get("unfreeze_blocks", 1)) != unfreeze_blocks:
+            raise RuntimeError("unfrozen block count changed; refusing resume")
         saved_samples = int(blob.get("samples_in_group", 0))
         if saved_samples > 0:
             microbatch = int(blob.get("microbatch", microbatch))
         model.load_state_dict(blob["model"])
         unfrozen = bool(blob.get("unfrozen"))
         if unfrozen:
-            model.unfreeze_last_block()
+            model.unfreeze_last_block(unfreeze_blocks)
         else:
             model.freeze_encoder()
         model = model.to(dev)
@@ -172,6 +179,19 @@ def train_study_model(
         samples_in_group = saved_samples
         order = list(blob.get("order") or [])
         _restore_rng(blob["rng"])
+        previous_supervised_weight = float(blob.get("supervised_weight") or 0)
+        # Completion is defined by consumed epochs, not successful updates:
+        # AMP can skip optimizer updates and masked-only groups do not step.
+        resume_validation = {
+            "epochs_complete": epoch >= epochs,
+            "positive_updates": step > 0,
+            "update_counters_consistent": skipped_updates >= 0 and attempted_updates == step + skipped_updates,
+            "optimizer_state_present": bool(blob.get("optimizer", {}).get("state")),
+            "input_identity_matches": input_id is not None and blob.get("input_id") == input_id,
+            "config_identity_matches": config_id is not None and blob.get("config_id") == config_id,
+            "no_partial_group": saved_samples == 0,
+        }
+        validated_completed_resume = all(resume_validation.values())
         input_id = blob.get("input_id", input_id)
         config_id = blob.get("config_id", config_id)
     else:
@@ -188,7 +208,7 @@ def train_study_model(
     interrupted = False
     oob_fired = False
     weight_acc = 0.0
-    supervised_weight = 0.0
+    supervised_weight = previous_supervised_weight
     opt.zero_grad(set_to_none=True)
     group_cursor = cursor
     group_offset = batch_offset
@@ -217,6 +237,8 @@ def train_study_model(
             config_id=config_id,
             attempted_updates=attempted_updates,
             skipped_updates=skipped_updates,
+            unfreeze_blocks=unfreeze_blocks,
+            supervised_weight=supervised_weight,
         )
 
     def mark_group() -> None:
@@ -273,8 +295,8 @@ def train_study_model(
         samples_in_group = 0
         weight_acc = 0.0
         if updated and unfreeze_after_steps is not None and step >= unfreeze_after_steps and not unfrozen:
-            model.unfreeze_last_block()
-            params = [p for p in model.encoder.blocks[-1].parameters() if p.requires_grad]
+            model.unfreeze_last_block(unfreeze_blocks)
+            params = [p for p in model.encoder.parameters() if p.requires_grad]
             if params:
                 opt.add_param_group({"params": params, "lr": lr_backbone})
                 sched.base_lrs.append(lr_backbone)
@@ -361,6 +383,9 @@ def train_study_model(
         "unfrozen": unfrozen,
         "updates_planned": total_steps,
         "supervised_weight": supervised_weight,
+        "validated_completed_resume": validated_completed_resume,
+        "resume_validation": resume_validation,
+        "epochs_completed": epoch,
     }
 
 
@@ -386,6 +411,8 @@ def _save(
     config_id: str | None,
     attempted_updates: int = 0,
     skipped_updates: int = 0,
+    unfreeze_blocks: int = 1,
+    supervised_weight: float = 0.0,
 ) -> None:
     torch_save(
         path,
@@ -395,6 +422,8 @@ def _save(
             "pooling_version": model.pooling_version,
             "model": {k: v.detach().cpu() for k, v in model.state_dict().items()},
             "optimizer": opt.state_dict(),
+            "unfreeze_blocks": unfreeze_blocks,
+            "supervised_weight": supervised_weight,
             "scheduler": sched.state_dict(),
             "scaler": None if scaler is None else scaler.state_dict(),
             "epoch": epoch,

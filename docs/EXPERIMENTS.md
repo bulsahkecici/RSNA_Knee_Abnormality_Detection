@@ -209,3 +209,45 @@ The first duration8 offline kernel failed because its integrity manifest include
 The CPU cache and subsequent independent verification kernel completed. All 4219 studies have three planes, uint8 shards of shape [3,6,3,224,224], and zero quarantine; verification checked every shard hash, masks and nonconstant present planes. Cache manifest SHA256: `8a2332466bd15b955eda61acc7e0e46792cc503e8b484f4cb19c5bbe116de87a`. Payload totals 11,431,397,376 bytes. MRI shards remain remote.
 
 Private kernel `bulsahkecici/rsna-auto-20261009-sixcenter-finetune` version 1 is confirmed RUNNING. It uses the same frozen initialization, eight epochs, learning rates, seed, folds and numeric labels as duration8, changing coverage from three to six centers. This is a new warm-start experiment with reset optimizer/scheduler, not a strict checkpoint resume. Its controller reviews against the stronger duration8 baseline and packages the six-center preprocessing policy only if the candidate passes. No six-center metrics or competition submission exist yet.
+
+### 2026-10-09 — Colab six-center seed 2047
+
+Real 8-epoch DINOv2 training finished with `exit_reason=ok`; archive ingested under `artifacts/colab/sixcenter-seed2047/output`. Independent review verified matching training UIDs, exclusion of gold evaluation UIDs, unique aligned finite probabilities, and recomputed masked gold/weak AUCs matching reported metrics. Candidate checkpoint SHA-256: `aeacc0e53563b71d63c9c4060553dc224caac52bd1276c6d652eccabc8ee8fb0`.
+
+| Model | Gold AUC (29 studies) | Weak holdout AUC (824 studies) |
+|---|---:|---:|
+| Six-center seed 2026 (public 0.767) | 0.781277 | 0.796132 |
+| Colab seed 2047 | 0.780467 | 0.796418 |
+| Fixed 50/50 probability ensemble | 0.781473 | 0.796324 |
+
+The ensemble improves gold by 0.000196 and weak by 0.000192. Paired 500-resample gold delta interval: [-0.007302, 0.008196]. Neither the seed candidate nor ensemble meets the existing promotion gate (weak delta >= 0.002). Keep the public 0.767 model; no new Kaggle submission. The reused small gold split limits certainty; these are heldout metrics, not independent cross-validation or new leaderboard scores. Detailed evidence: `review.json` and `ensemble-review.json` in the ingested output directory. Next planned controlled experiment remains last-two-block fine-tuning with matched cache, labels and split.
+
+### 2026-10-09 — Two-block Colab result; submissions disabled
+
+Imported the replaced `artifacts/colab/colab-results.zip` into `artifacts/colab/two-block-seed2026/output`. Real DINOv2 training completed; matching train UIDs, gold exclusion, aligned finite predictions and independently recomputed masked AUCs pass. Gold AUC 0.79532030 (+0.01404333), weak holdout AUC 0.80838210 (+0.01224970) versus six-center one-block seed2026. Paired gold delta interval [-0.00882433, 0.03584443]. This is a stronger local baseline, not a measured public score or independent OOF result. User explicitly declined submission; no Kaggle publication was performed. `state/submission-policy.json` disables the autonomous publisher until explicit user reauthorization.
+
+Next prepared local notebook: `07_colab_sixcenter_label_attention.ipynb`. Controlled finding-specific attention on the existing six-center views, same frozen initialization/two blocks/seed2026/8 epochs. Zero-initialized attention reproduces masked mean; head optimizer includes attention parameters. No additional images, labels or public weights are introduced. Attention parity, masked-view invariance, finite empty-mask outputs and gradient/optimizer coverage were tested. Subsequent experiment should broaden coverage/series after measured aggregation results, not infer a 0.9+ leaderboard promise.
+
+#### Attention notebook evaluation packaging correction
+
+The initial Colab handoff trained successfully through the training phase but failed in checkpoint evaluation: its embedded historic `evaluation/heldout.py` constructed mean pooling, rejecting `attention.weight`. Updated the generated notebook to embed and reload the current pooling-aware evaluator before running the worker. Existing Drive checkpoints can resume under the same experiment identity; no new score is claimed until evaluation completes. Added an attention checkpoint round-trip evaluation test, including nonzero attention parameters, to verify that the evaluator preserves the model's outputs.
+
+#### Completed-checkpoint supervision recovery
+
+After fixing attention evaluation, rerunning a completed job returned `no_supervision`: the training loop counted only supervision observed in the current invocation, which is zero when all epochs have already finished. The loop now persists/restores cumulative supervision. Legacy checkpoints without that counter qualify for evaluation-only recovery only when completed epochs/steps, nonempty optimizer state, exact input/config identity and current nonzero masked supervision are verified. No new training or synthetic score is implied. Updated the Colab attention handoff and added completed-resume/legacy-identity regression tests.
+
+#### AMP-aware completed-resume correction and recovery handoff
+
+The previous legacy check incorrectly required successful update count to reach the planned scheduler budget. Completed epochs can have fewer successful updates because AMP skips nonfinite steps or masked-only groups produce no update. Legacy completion now requires completed epochs, positive successful updates, consistent attempted/successful/skipped counters, nonempty optimizer state, no partial group and exact input/config identity. It does not waive gold exclusion or current label supervision. A regression fixture covers skipped updates and rejects inconsistent counters. `08_recover_colab_attention_evaluation.ipynb` provides a dedicated existing-runtime evaluation handoff: it prints nonsecret counters, refuses incomplete epochs, reloads pinned implementations, asserts no new successful steps, saves real metrics/archive and never submits. Colab execution still awaits user-run evidence.
+
+### 2026-10-09 — Verified attention result and fixed ensemble
+
+Attention archive ingested under `artifacts/colab/label-attention-seed2026/output`. Independent review passed real training, train-UID equality, gold-image exclusion, unique aligned finite predictions, and masked AUC recomputation. Checkpoint SHA-256 `bca3fb160434fbfadc220006379dfc9bbba955ffc638be3cb84bbb6c8d50c7dc`. Completed epochs 8, successful steps 3361, attempted updates 3368, AMP skips 7; recovery evaluated without new optimizer updates.
+
+| Model | Gold AUC (29 studies) | Weak AUC (824 studies) |
+|---|---:|---:|
+| Two-block mean baseline | 0.79532030 | 0.80838210 |
+| Finding-specific attention | 0.78327653 | 0.81028034 |
+| Fixed 50/50 probability average | 0.79040248 | 0.81103080 |
+
+Attention gold delta -0.01204377, weak +0.00189824; paired gold delta interval [-0.03376324, 0.00553083]. Equal ensemble gold delta -0.00491783, weak +0.00264871; paired interval [-0.01954442, 0.00812109]. Neither passes the current promotion gate due to gold regression; do not tune blend weights on the reused 29-study gold set. Keep two-block mean as local reference, while retaining attention as an exploratory candidate for broader image bags. No Kaggle submission/public-score claim. Submission policy remains disabled. Next work is denser physical coverage and additional MRI series with bounded cache size, sampled training windows and real runtime/QC evidence.

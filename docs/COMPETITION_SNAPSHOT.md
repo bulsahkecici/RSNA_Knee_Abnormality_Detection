@@ -50,3 +50,8 @@ Read-only competition-researcher agent verified Evaluation, Timeline, Code Requi
 GPU quota: 22.62h remaining /30h; API refresh timestamp 2026-10-10T00:00:00 has unspecified timezone. Submission API: 1 today, 4 remaining, daily limit 5 and two final selections. Final deadline 2026-10-22 23:59 UTC (2026-10-23 02:59 Europe/Istanbul). Entry/team deadline 2026-10-15 23:59 UTC. Runtime remains <=9h, Internet disabled, submission.csv, macro AUC across all12 targets. About1300 hidden studies is approximate official data-page information.
 
 Sources: https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/overview/evaluation ; https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/overview/timeline ; https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/overview/code-requirements ; https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/rules ; https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/leaderboard ; https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/discussion/733343
+
+
+## Strategy research refresh — 2026-10-09
+
+Read-only authenticated Kaggle CLI refreshed leaderboard, quota, Timeline and Code Requirements. Public leaders are 0.964; GPU quota is 19.13 h remaining of 30 h, with refreshAt 2026-10-10T00:00:00 (timezone not specified). CPU/GPU scoring notebook limit remains 9 h, internet disabled, submission.csv. Final deadline October 22 23:59 UTC / October 23 02:59 Europe/Istanbul. User has explicitly disabled submissions; this refresh does not authorize one. Detailed evidence and primary URLs: [strategy report](research/LIDERLIK_STRATEJISI_20261009.md) and [host ruling review](research/KAGGLE_STRATEGY_20261009.md).

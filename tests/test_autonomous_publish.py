@@ -83,3 +83,17 @@ def test_queue_refuses_ambiguous_kernel_push(tmp_path,monkeypatch):
         module.run()
     assert calls==[]
     assert json.loads((tmp_path/'status.json').read_text())['phase']=='NEEDS_ATTENTION'
+
+
+def test_user_disabled_publication_policy(tmp_path, monkeypatch):
+    import json
+    import pytest
+    module = load_module('candidate_publish')
+    monkeypatch.setattr(module, 'ROOT', tmp_path)
+    module.assert_submission_policy()
+    (tmp_path/'state').mkdir()
+    (tmp_path/'state/submission-policy.json').write_text(json.dumps({'allow_submission':False}))
+    with pytest.raises(RuntimeError, match='disabled by user'):
+        module.assert_submission_policy()
+    (tmp_path/'state/submission-policy.json').write_text(json.dumps({'allow_submission':True}))
+    module.assert_submission_policy()

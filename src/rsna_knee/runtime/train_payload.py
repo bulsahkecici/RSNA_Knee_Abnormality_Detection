@@ -18,6 +18,28 @@ from rsna_knee.ontology import TARGET_COLUMNS
 from rsna_knee.training.loop import NUMERICAL_POLICY_VERSION
 
 
+def shard_path(uid: str, meta: dict[str, Any], root: Path) -> Path:
+    if not uid or uid in {".", ".."} or any(c not in "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ._-" for c in uid):
+        raise ValueError("unsafe study uid")
+    storage = meta.get("storage_format", "npy")
+    if storage not in {"npy", "npz"}:
+        raise ValueError("unsupported cache storage format")
+    expected = f"{uid}.{storage}"
+    if meta.get("shard_filename", expected) != expected:
+        raise ValueError("cache shard filename mismatch")
+    return root / expected
+
+
+def load_volume(uid: str, meta: dict[str, Any], root: Path) -> np.ndarray:
+    path = shard_path(uid, meta, root)
+    if path.suffix == ".npz":
+        with np.load(path, allow_pickle=False) as archive:
+            if archive.files != ["images"]:
+                raise ValueError("compressed cache must contain only images")
+            return archive["images"]
+    return np.load(path, mmap_mode="r", allow_pickle=False)
+
+
 def resolve_resource(spec: dict[str, Any], job_dir: Path) -> Path | None:
     relative = spec.get("relative")
     uri = spec.get("uri")
@@ -135,8 +157,7 @@ class LazyStudyBatch:
         self._shape = tuple(int(v) for v in shape)
 
     def _images(self) -> torch.Tensor:
-        shard = self.root / f"{self.uid}.npy"
-        volume = np.load(shard, mmap_mode="r")
+        volume = load_volume(self.uid, self.meta, self.root)
         if tuple(volume.shape) != self._shape:
             raise ValueError(f"{self.uid} shard shape changed")
         array = np.array(volume, dtype=np.float32, copy=True)
@@ -189,7 +210,12 @@ def prepare_training(job: dict[str, Any], job_dir: Path) -> tuple[dict[str, Any]
         return None, "cache_scope_missing"
     studies = manifest.get("studies") or {}
     cache_root = paths["cache"].parent
-    missing = [uid for uid, meta in studies.items() if not (cache_root / f"{uid}.npy").is_file() or sha256_file(cache_root / f"{uid}.npy") != meta.get("sha256")]
+    try:
+        missing = [uid for uid, meta in studies.items()
+                   if not shard_path(uid, meta, cache_root).is_file()
+                   or sha256_file(shard_path(uid, meta, cache_root)) != meta.get("sha256")]
+    except ValueError:
+        return None, "invalid_cache_storage"
     if missing:
         return None, "shard_missing"
     gold_spec = resources.get("train_csv") or resources.get("metadata")

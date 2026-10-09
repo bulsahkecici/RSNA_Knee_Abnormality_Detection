@@ -79,3 +79,12 @@ logs/
 
 # Keep synthetic fixtures
 !tests/fixtures/**
+
+# Local Colab artifacts and generated notebooks with private numeric label payloads
+/artifacts/colab/
+/notebooks/05_colab_sixcenter_seed2047.ipynb
+/notebooks/06_colab_sixcenter_two_blocks.ipynb
+
+/notebooks/07_colab_sixcenter_label_attention.ipynb
+/artifacts/research/
+/notebooks/08_recover_colab_attention_evaluation.ipynb

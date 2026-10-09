@@ -10,6 +10,11 @@ import time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 
+def assert_submission_policy():
+ policy=ROOT/'state/submission-policy.json'
+ if policy.is_file() and json.loads(policy.read_text()).get('allow_submission') is not True:
+  raise RuntimeError('Kaggle publication disabled by user: continue local experiments only')
+
 def bundle_files(asset):
  return {str(p.relative_to(asset)):hashlib.sha256(p.read_bytes()).hexdigest()
          for p in asset.rglob('*') if p.is_file() and p.name!='MANIFEST.json'
@@ -58,6 +63,7 @@ def publish(item,folder,call,write,notify):
   if state['phase'] in ['SUBMIT_UNKNOWN','ASSET_PUSH_UNKNOWN','KERNEL_PUSH_UNKNOWN']:
    raise RuntimeError('Reconcile ambiguous/publication state before retry')
  else:state={'candidate':item['kernel'],'phase':'PREPARING'}
+ assert_submission_policy()
  def save(phase):state.update(phase=phase,updated_ts=time.time());write(statepath,state)
  out=ROOT/item['directory']/'output';checkpoint=out/'job/checkpoint.pt';metrics=json.loads((out/'job/metrics.json').read_text())
  assert hashlib.sha256(checkpoint.read_bytes()).hexdigest()==metrics['oof_provenance']['checkpoint_sha256']
@@ -104,5 +110,6 @@ def publish(item,folder,call,write,notify):
  state['limits']=wait_submission_slot(call,pending)
  state['submission_description']='Reviewed autonomous v3 candidate '+tag+' ['+str(time.time_ns())+']'
  save('SUBMIT_UNKNOWN')
+ assert_submission_policy()
  state['receipt']=call(['competitions','submit','rsna-knee-abnormality-detection','-k',kernel,'-v',str(state.get('kernel_version',1)),'-f','submission.csv','-m',state['submission_description']]);save('SUBMITTED');notify('Yeni aday Kaggle yarışmasına gönderildi: '+tag)
  return track_submission(state,statepath,call,write,notify)
