@@ -47,6 +47,19 @@ def test_duplicate_description_refuses_score_attribution(tmp_path):
             lambda *args:None,lambda *args:None)
 
 
+def test_daily_limit_waits_without_external_mutation(monkeypatch):
+    module=load_module('candidate_publish')
+    limits=iter(['Remaining today: 0','Remaining today: 0','Remaining today: 5'])
+    calls=[];pending=[];sleeps=[]
+    monkeypatch.setattr(module.time,'sleep',sleeps.append)
+    def call(args):
+        calls.append(args)
+        return next(limits)
+    assert module.wait_submission_slot(call,pending.append)=='Remaining today: 5'
+    assert len(pending)==2 and sleeps==[60,60]
+    assert all(args[:2]==['competitions','submission-limits'] for args in calls)
+
+
 def test_queue_refuses_ambiguous_kernel_push(tmp_path,monkeypatch):
     module=load_module('autonomous_campaign')
     monkeypatch.setattr(module,'FOLDER',tmp_path)

@@ -10,6 +10,14 @@ import time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 
+def wait_submission_slot(call,on_wait):
+ """Wait using read-only limit checks; keep the candidate pending."""
+ while True:
+  limits=call(['competitions','submission-limits','-c','rsna-knee-abnormality-detection'])
+  if 'Remaining today: 0' not in limits:return limits
+  on_wait(limits)
+  time.sleep(60)
+
 def track_submission(state,statepath,call,write,notify):
  """Read-only reconciliation by the unique description, never resubmit."""
  description=state.get('submission_description')
@@ -84,8 +92,11 @@ def publish(item,folder,call,write,notify):
   reader=csv.DictReader(handle);rows=list(reader)
  assert len(rows)>0 and all(math.isfinite(float(r[k])) and 0<=float(r[k])<=1 for r in rows for k in reader.fieldnames if k!='StudyInstanceUID')
  save('OFFLINE_PASSED')
- limits=call(['competitions','submission-limits','-c','rsna-knee-abnormality-detection']);state['limits']=limits
- if 'Remaining today: 0' in limits:save('DAILY_LIMIT_WAIT');notify('Aday doğrulandı; günlük gönderim limiti bekleniyor');return
+ def pending(limits):
+  first=state['phase']!='DAILY_LIMIT_WAIT'
+  state['limits']=limits;save('DAILY_LIMIT_WAIT')
+  if first:notify('Aday doğrulandı; günlük gönderim limiti bekleniyor')
+ state['limits']=wait_submission_slot(call,pending)
  state['submission_description']='Reviewed autonomous v3 candidate '+tag+' ['+str(time.time_ns())+']'
  save('SUBMIT_UNKNOWN')
  state['receipt']=call(['competitions','submit','rsna-knee-abnormality-detection','-k',kernel,'-v','1','-f','submission.csv','-m',state['submission_description']]);save('SUBMITTED');notify('Yeni aday Kaggle yarışmasına gönderildi: '+tag)
