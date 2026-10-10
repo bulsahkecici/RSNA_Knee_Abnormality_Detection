@@ -104,25 +104,28 @@ def download_part(kernel, part_dir, log_path, attempts=5, stall_seconds=900):
         cmd = [shutil.which('kaggle'), 'kernels', 'output', kernel, '-p', str(part_dir), '--page-size', '200']
         with open(log_path, 'w') as log:
             proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, text=True)
-        size = lambda: sum(f.stat().st_size for f in part_dir.rglob('*') if f.is_file())
-        last_size, last_growth, started = size(), time.time(), time.time()
+        # Progress is new bytes on disk or new CLI log lines: a resumed run spends a long time only skipping files.
+        progress = lambda: sum(f.stat().st_size for f in part_dir.rglob('*') if f.is_file()) + log_path.stat().st_size
+        last_progress, last_growth, started, stalled = progress(), time.time(), time.time(), False
         while proc.poll() is None:
             time.sleep(60)
-            now_size = size()
-            if now_size > last_size: last_size, last_growth = now_size, time.time()
-            n_files = log_path.read_text().count('Output file downloaded')
-            print(f'  {part_dir.name}: {now_size / 2**30:.1f} GiB on disk, {n_files} files this attempt, '
-                  f'{(time.time() - started) / 60:.0f} min', flush=True)
+            now = progress()
+            if now > last_progress: last_progress, last_growth = now, time.time()
+            log_text = log_path.read_text()
+            on_disk = sum(f.stat().st_size for f in part_dir.rglob('*') if f.is_file())
+            print(f'  {part_dir.name}: {on_disk / 2**30:.1f} GiB on disk, {log_text.count("Output file downloaded")} downloaded '
+                  f'+ {log_text.count("Skipping")} already present this attempt, {(time.time() - started) / 60:.0f} min', flush=True)
             if time.time() - last_growth > stall_seconds:
-                proc.kill(); proc.wait()
+                proc.kill(); proc.wait(); stalled = True
                 print(f'  no progress for {stall_seconds // 60} min, restarting (resume skips finished files)', flush=True)
         text = redact(log_path.read_text())
         if proc.returncode == 0:
             assert 'Next page token' not in text, 'CLI stopped after one page; expected it to fetch every page'
             return
-        print(f'  attempt {attempt}/{attempts} failed:', text[-500:], flush=True)
+        error = 'stalled, killed' if stalled else '\n'.join(l for l in text.splitlines() if 'Skipping' not in l)[-1500:]
+        print(f'  attempt {attempt}/{attempts} failed (exit {proc.returncode}):', error, flush=True)
         time.sleep(30 * attempt)
-    raise RuntimeError('Kaggle download failed:\n' + text[-2000:])
+    raise RuntimeError(f'Kaggle download failed after {attempts} attempts:\n' + error)
 part_manifests = []
 for part in EXPERIMENT['cache_parts']:  # one or more Kaggle cache outputs built with one policy
     part_dir = INPUT_ROOT / part['kernel'].split('/')[-1]
