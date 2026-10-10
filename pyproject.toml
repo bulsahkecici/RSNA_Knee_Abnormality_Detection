@@ -76,6 +76,9 @@ filterwarnings = [
 line-length = 110
 target-version = "py312"
 src = ["src", "tests"]
+# Machine-generated Colab notebooks (scripts/make_colab_notebook.py); lint the generator instead.
+extend-exclude = ["notebooks/generated"]
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

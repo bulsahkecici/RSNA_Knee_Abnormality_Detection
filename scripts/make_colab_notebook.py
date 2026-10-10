@@ -72,7 +72,7 @@ assert shutil.disk_usage('/content').free > 40 * 1024**3, 'At least 40 GB free d
 print('GPU:', torch.cuda.get_device_name(0), '| PyTorch:', torch.__version__)
 subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'kaggle', 'pydicom==3.0.1', 'pydantic>=2.7',
                 'pyyaml', 'filelock', 'scikit-learn', 'jsonschema', 'timm'], check=True)
-from google.colab import drive
+from google.colab import drive  # pyright: ignore[reportMissingImports]  (exists only on Colab)
 drive.mount('/content/drive')
 WORK = Path('/content/drive/MyDrive/RSNA/colab') / EXPERIMENT['id']
 WORK.mkdir(parents=True, exist_ok=True)
