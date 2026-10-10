@@ -130,6 +130,10 @@ SOURCE = Path('/tmp/rsna-src-' + EXPERIMENT['source_sha256'][:16])
 with tarfile.open(fileobj=io.BytesIO(unpack(SOURCE_B64, EXPERIMENT['source_sha256'])), mode='r:gz') as archive:
     archive.extractall(SOURCE, filter='data')
 sys.path.insert(0, str(SOURCE / 'src'))
+# rsna_knee finds the repository root (configs/, weight allowlist) from the working directory.
+os.chdir(SOURCE)
+os.environ['RSNA_DINOV2_ALLOWLIST'] = str(SOURCE / 'configs/dinov2_vits14_allowlist.json')
+assert EXPERIMENT['weights_sha256'] in json.loads((SOURCE / 'configs/dinov2_vits14_allowlist.json').read_text())['sha256']
 LABELS = WORK / 'labels.jsonl'; LABELS.write_bytes(unpack(LABELS_B64, EXPERIMENT['labels_gz_sha256'], gz=True))
 FOLDS = WORK / 'folds.csv'; FOLDS.write_bytes(unpack(FOLDS_B64, EXPERIMENT['folds_sha256']))
 SOFT = None
@@ -219,7 +223,9 @@ def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha2
     folds_path = ROOT / spec.get("folds", "state/folds-v2-allgold.csv")
     labels, folds = LABELS.read_bytes(), folds_path.read_bytes()
     labels_gz = gzip.compress(labels, mtime=0)
-    archive, names = source_archive(ref)
+    archive, names = source_archive(ref, extra=("configs", "pyproject.toml"))
+    if "configs/dinov2_vits14_allowlist.json" not in names:
+        raise SystemExit("source archive lacks the DINOv2 weight allowlist")
     uids = train_uids(folds_path, labels, outer_fold)
     weights_sha = json.loads((ROOT / "configs/dinov2_vits14_allowlist.json").read_text())["sha256"][0]
     experiment = {

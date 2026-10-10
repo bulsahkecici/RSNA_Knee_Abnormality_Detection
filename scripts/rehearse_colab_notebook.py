@@ -8,6 +8,11 @@ the embedded source, labels and folds, synthetic folds/labels/train UIDs are swa
 in and the run uses the CPU pilot profile for one epoch. A pass means the notebook
 code paths work end to end; it says nothing about model quality.
 
+Each notebook runs twice in a fresh interpreter with an empty working directory (as in
+Colab): first with the weight allowlist made unavailable, which must fail at the weight
+check, then again in the same output folder, which must finish — the "Run All again
+after a failure" path.
+
 Usage: python scripts/rehearse_colab_notebook.py D1 [D0 L1 D2 ...] --scratch /path/to/tmp
 """
 from __future__ import annotations
@@ -90,34 +95,76 @@ def synthetic_parts(scratch: Path, exp: dict, root: Path, uids: list[str]) -> li
     return parts
 
 
+# Runs in a fresh interpreter whose working directory is empty, like Colab's /content:
+# rsna_knee must come from the archive embedded in the notebook, never from this repo.
+CHILD = r"""
+import json, os, shutil, subprocess, sys
+from pathlib import Path
+args = json.loads(Path(sys.argv[1]).read_text())
+assert 'rsna_knee' not in sys.modules
+import torch
+torch.cuda.get_device_name = lambda *a: 'local-rehearsal'
+torch.cuda.max_memory_allocated = lambda *a: 0
+src = args['cells']
+ns = {'__name__': '__main__'}
+exec(src[0], ns)
+work = Path(args['work']); work.mkdir(parents=True, exist_ok=True)
+ns.update(WORK=work, sys=sys, os=os, json=json, Path=Path, shutil=shutil, subprocess=subprocess, torch=torch,
+          INPUT_ROOT=Path(args['input_root']))
+exec(src[3], ns)
+assert Path(ns['SOURCE']).resolve() == Path.cwd().resolve(), 'payload cell must chdir into the embedded source'
+import rsna_knee
+assert Path(rsna_knee.__file__).resolve().is_relative_to(Path(ns['SOURCE']).resolve()), rsna_knee.__file__
+shutil.copy(args['folds'], ns['FOLDS']); shutil.copy(args['labels'], ns['LABELS'])
+if ns.get('SOFT') is not None: shutil.copy(args['soft'], ns['SOFT'])
+exp = ns['EXPERIMENT']
+exp['train_uids'] = args['train_uids']
+exp['train'].update(profile='pilot', epochs=1, effective_batch=2)
+ns['part_manifests'] = [Path(p) for p in args['parts']]
+shutil.copy(args['weights'], work / 'dinov2_vits14_pretrain.pth')
+if args['break_allowlist']:
+    os.environ['RSNA_DINOV2_ALLOWLIST'] = str(work / 'missing-allowlist.json')
+try:
+    exec(src[4], ns)
+except AssertionError as error:
+    print(json.dumps({'train_cell': 'assertion', 'detail': str(error)})); sys.exit(3)
+exec(src[5], ns)
+print(json.dumps({'train_cell': 'ok', 'archive_bytes': ns['archive_path'].stat().st_size}))
+"""
+
+
+def _child(exp_id: str, src: list[str], run: Path, scratch: Path, parts: list[Path], uids: list[str],
+           *, break_allowlist: bool) -> subprocess.CompletedProcess:
+    cwd = run / "empty-cwd"
+    cwd.mkdir(parents=True, exist_ok=True)
+    spec = {"cells": src, "work": str(run / "work"), "input_root": str(run / "input-root"),
+            "folds": str(scratch / "folds.csv"), "labels": str(scratch / "labels.jsonl"),
+            "soft": str(scratch / "soft.jsonl"), "parts": [str(p) for p in parts],
+            "train_uids": [u for k, u in enumerate(uids) if k >= 3 and k % 5 != 0],
+            "weights": str(ROOT / "artifacts/weights/dinov2_vits14_pretrain.pth"), "break_allowlist": break_allowlist}
+    (run / "spec.json").write_text(json.dumps(spec))
+    (run / "child.py").write_text(CHILD)
+    return subprocess.run([sys.executable, "-I", str(run / "child.py"), str(run / "spec.json")], cwd=cwd,
+                          capture_output=True, text=True)
+
+
 def rehearse(exp_id: str, scratch: Path) -> None:
     nb = json.loads((ROOT / "notebooks/generated" / f"{exp_id}.ipynb").read_text())
     src = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"]
+    exp = json.loads((ROOT / "notebooks/generated" / f"{exp_id}.build.json").read_text())
     root, uids = synthetic_inputs(scratch)
-    import torch
-    torch.cuda.get_device_name = lambda *a: "local-rehearsal"
-    torch.cuda.max_memory_allocated = lambda *a: 0
     run = scratch / f"run-{exp_id}"
     shutil.rmtree(run, ignore_errors=True)
-    ns: dict = {"__name__": "__main__"}
-    exec(src[0], ns)  # config cell
-    work = run / "work"
-    work.mkdir(parents=True)
-    ns.update(WORK=work, sys=sys, os=__import__("os"), json=json, Path=Path, shutil=shutil, subprocess=subprocess,
-              torch=torch, INPUT_ROOT=run / "input-root")
-    exec(src[3], ns)  # payload cell: unpack and hash-verify embedded source/labels/folds
-    exp = ns["EXPERIMENT"]
-    shutil.copy(scratch / "folds.csv", ns["FOLDS"])
-    shutil.copy(scratch / "labels.jsonl", ns["LABELS"])
-    if ns.get("SOFT") is not None:
-        shutil.copy(scratch / "soft.jsonl", ns["SOFT"])
-    exp["train_uids"] = [u for k, u in enumerate(uids) if k >= 3 and k % 5 != 0]
-    exp["train"].update(profile="pilot", epochs=1, effective_batch=2)
-    ns["part_manifests"] = synthetic_parts(scratch, exp, root, uids)
-    shutil.copy(ROOT / "artifacts/weights/dinov2_vits14_pretrain.pth", work / "dinov2_vits14_pretrain.pth")
-    exec(src[4], ns)  # train cell
-    exec(src[5], ns)  # collect cell
-    print(json.dumps({"experiment": exp_id, "rehearsal": "ok", "archive_bytes": ns["archive_path"].stat().st_size}))
+    parts = synthetic_parts(scratch, {"id": exp_id, **exp}, root, uids)
+    # 1) a run that fails at the weight check, 2) Run All again in the same Drive folder.
+    failed = _child(exp_id, src, run, scratch, parts, uids, break_allowlist=True)
+    if failed.returncode != 3 or "unverified_weights" not in failed.stdout:
+        raise SystemExit(f"{exp_id}: expected an unverified_weights failure\n{failed.stdout[-1500:]}\n{failed.stderr[-3000:]}")
+    done = _child(exp_id, src, run, scratch, parts, uids, break_allowlist=False)
+    if done.returncode != 0:
+        raise SystemExit(f"{exp_id}: rehearsal failed\n{done.stdout[-1500:]}\n{done.stderr[-4000:]}")
+    print(json.dumps({"experiment": exp_id, "rehearsal": "ok", "rerun_after_failure": "ok",
+                      "child": json.loads(done.stdout.strip().splitlines()[-1])}))
 
 
 def main() -> None:

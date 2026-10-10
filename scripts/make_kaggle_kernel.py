@@ -32,10 +32,16 @@ def _git(*args: str) -> bytes:
     return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, check=True).stdout
 
 
-def source_archive(ref: str) -> tuple[bytes, list[str]]:
-    """Archive ``src/rsna_knee`` as committed at ``ref``; uncommitted edits never leak in."""
+def source_archive(ref: str, extra: tuple[str, ...] = ()) -> tuple[bytes, list[str]]:
+    """Archive ``src/rsna_knee`` (plus ``extra`` committed paths) as of ``ref``; uncommitted edits never leak in.
+
+    Code that locates the repository root from the working directory (configs, weight
+    allowlist) needs ``extra=("configs", "pyproject.toml")`` and a chdir into the archive.
+    """
     names = sorted(n for n in _git("ls-tree", "-r", "--name-only", ref, "--", "src/rsna_knee").decode().splitlines()
                    if n.endswith(".py"))
+    if extra:
+        names += sorted(_git("ls-tree", "-r", "--name-only", ref, "--", *extra).decode().splitlines())
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz", format=tarfile.PAX_FORMAT) as archive:
         for name in names:
