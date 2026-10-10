@@ -96,9 +96,10 @@ def redact(text):
         if os.environ.get(name): text = text.replace(os.environ[name], '[REDACTED]')
     return re.sub(r'KGAT_[A-Za-z0-9_-]+', '[REDACTED]', text)
 import hashlib
+INPUT_ROOT = Path('/content/rsna-input')
 part_manifests = []
 for part in EXPERIMENT['cache_parts']:  # one or more Kaggle cache outputs built with one policy
-    part_dir = Path('/content/rsna-input') / part['kernel'].split('/')[-1]
+    part_dir = INPUT_ROOT / part['kernel'].split('/')[-1]
     found = list(part_dir.rglob('cache/manifest.json'))
     if not found:
         part_dir.mkdir(parents=True, exist_ok=True)
@@ -149,7 +150,7 @@ if len(part_manifests) == 1:
     manifest_path = part_manifests[0]
 else:  # move shard parts into one directory; manifest_ready below re-verifies every shard
     from rsna_knee.data.cache_build import merge_cache_parts
-    merged_dir = Path('/content/rsna-input/merged-' + EXPERIMENT['cache_manifest_sha256'][:12]) / 'cache'
+    merged_dir = INPUT_ROOT / ('merged-' + EXPERIMENT['cache_manifest_sha256'][:12]) / 'cache'
     if not (merged_dir / 'manifest.json').is_file():
         merge_cache_parts([m.parent for m in part_manifests], merged_dir)
     manifest_path = merged_dir / 'manifest.json'
