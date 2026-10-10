@@ -239,7 +239,8 @@ def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha2
               "Run All. Outputs and checkpoints live on Drive, so re-running after a disconnect resumes.")
     cells = [
         _md(header),
-        _code("EXPERIMENT = " + json.dumps(experiment, indent=1)),
+        # JSON literals (null/true/false) are not Python: decode the pinned JSON at run time.
+        _code("import json\nEXPERIMENT = json.loads(" + repr(json.dumps(experiment, indent=1)) + ")"),
         _code(SETUP),
         _code(AUTH_AND_CACHE),
         _code(f"SOURCE_B64 = {base64.b64encode(archive).decode()!r}\n"
@@ -252,6 +253,10 @@ def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha2
     ]
     notebook = {"cells": cells, "nbformat": 4, "nbformat_minor": 5,
                 "metadata": {"accelerator": "GPU", "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}}}
+    namespace: dict = {}
+    exec("".join(cells[1]["source"]), namespace)  # the config cell must run, not only parse
+    if namespace["EXPERIMENT"] != experiment:
+        raise SystemExit("EXPERIMENT cell does not round-trip")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / f"{exp_id}.ipynb"
     out.write_text(json.dumps(notebook, indent=1), encoding="utf-8")
