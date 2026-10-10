@@ -95,24 +95,44 @@ def redact(text):
     for name in ('KAGGLE_API_TOKEN', 'KAGGLE_KEY'):
         if os.environ.get(name): text = text.replace(os.environ[name], '[REDACTED]')
     return re.sub(r'KGAT_[A-Za-z0-9_-]+', '[REDACTED]', text)
-import hashlib
+import hashlib, time
 INPUT_ROOT = Path('/content/rsna-input')
+def download_part(kernel, part_dir, log_path, attempts=5, stall_seconds=900):
+    # The CLI fetches every page itself, one file at a time with no timeout: watch for stalls and retry.
+    # A retry skips files already complete on disk, so interrupting this cell and re-running also resumes.
+    for attempt in range(1, attempts + 1):
+        cmd = [shutil.which('kaggle'), 'kernels', 'output', kernel, '-p', str(part_dir), '--page-size', '200']
+        with open(log_path, 'w') as log:
+            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, text=True)
+        size = lambda: sum(f.stat().st_size for f in part_dir.rglob('*') if f.is_file())
+        last_size, last_growth, started = size(), time.time(), time.time()
+        while proc.poll() is None:
+            time.sleep(60)
+            now_size = size()
+            if now_size > last_size: last_size, last_growth = now_size, time.time()
+            n_files = log_path.read_text().count('Output file downloaded')
+            print(f'  {part_dir.name}: {now_size / 2**30:.1f} GiB on disk, {n_files} files this attempt, '
+                  f'{(time.time() - started) / 60:.0f} min', flush=True)
+            if time.time() - last_growth > stall_seconds:
+                proc.kill(); proc.wait()
+                print(f'  no progress for {stall_seconds // 60} min, restarting (resume skips finished files)', flush=True)
+        text = redact(log_path.read_text())
+        if proc.returncode == 0:
+            assert 'Next page token' not in text, 'CLI stopped after one page; expected it to fetch every page'
+            return
+        print(f'  attempt {attempt}/{attempts} failed:', text[-500:], flush=True)
+        time.sleep(30 * attempt)
+    raise RuntimeError('Kaggle download failed:\n' + text[-2000:])
 part_manifests = []
 for part in EXPERIMENT['cache_parts']:  # one or more Kaggle cache outputs built with one policy
     part_dir = INPUT_ROOT / part['kernel'].split('/')[-1]
-    found = list(part_dir.rglob('cache/manifest.json'))
-    if not found:
+    complete = INPUT_ROOT / (part_dir.name + '.download-complete')  # manifest.json can land before the shards
+    if not complete.is_file():
         part_dir.mkdir(parents=True, exist_ok=True)
-        token, seen = None, set()
-        while True:  # kernel output is paginated
-            cmd = [shutil.which('kaggle'), 'kernels', 'output', part['kernel'], '-p', str(part_dir), '--page-size', '200']
-            if token: cmd += ['--page-token', token]
-            done = subprocess.run(cmd, capture_output=True, text=True)
-            if done.returncode: raise RuntimeError('Kaggle download failed:\n' + redact(done.stderr + done.stdout)[-2000:])
-            nxt = re.search(r'Next page token:\s*(\S+)', done.stdout)
-            if not nxt: break
-            token = nxt.group(1); assert token not in seen, 'pagination loop'; seen.add(token)
-        found = list(part_dir.rglob('cache/manifest.json'))
+        print('Downloading', part['kernel'], flush=True)
+        download_part(part['kernel'], part_dir, INPUT_ROOT / (part_dir.name + '.log'))
+        complete.touch()
+    found = list(part_dir.rglob('cache/manifest.json'))
     assert len(found) == 1, f'expected one cache manifest in {part_dir}, found {len(found)}'
     digest = hashlib.sha256(found[0].read_bytes()).hexdigest()
     assert digest == part['manifest_sha256'], f'cache manifest mismatch for {part["kernel"]}: {digest}'
