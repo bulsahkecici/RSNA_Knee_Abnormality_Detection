@@ -70,7 +70,7 @@ assert torch.cuda.is_available(), 'Select a Colab GPU runtime first.'
 assert sys.version_info >= (3, 11), 'Python 3.11+ required.'
 assert shutil.disk_usage('/content').free > 40 * 1024**3, 'At least 40 GB free disk required for the cache.'
 print('GPU:', torch.cuda.get_device_name(0), '| PyTorch:', torch.__version__)
-subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'kaggle', 'pydicom==3.0.1', 'pydantic>=2.7',
+subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'kaggle>=2.2', 'pydicom==3.0.1', 'pydantic>=2.7',
                 'pyyaml', 'filelock', 'scikit-learn', 'jsonschema', 'timm'], check=True)
 from google.colab import drive  # pyright: ignore[reportMissingImports]  (exists only on Colab)
 drive.mount('/content/drive')
