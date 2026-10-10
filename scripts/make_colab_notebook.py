@@ -13,6 +13,7 @@ which is gitignored. It never submits to Kaggle and reads no raw reports.
 Usage:
   python scripts/make_colab_notebook.py configs/experiments/D1.yaml \
       --cache-kernel bulsahkecici/rsna-v4-dense12-cache-20261009 --cache-manifest-sha256 <sha>
+  (repeat --cache-kernel/--cache-manifest-sha256 for a sharded cache; parts are merged in Colab)
 """
 from __future__ import annotations
 
@@ -94,26 +95,28 @@ def redact(text):
     for name in ('KAGGLE_API_TOKEN', 'KAGGLE_KEY'):
         if os.environ.get(name): text = text.replace(os.environ[name], '[REDACTED]')
     return re.sub(r'KGAT_[A-Za-z0-9_-]+', '[REDACTED]', text)
-CACHE_DIR = Path('/content/rsna-input') / EXPERIMENT['cache_kernel'].split('/')[-1]
-manifest_path = CACHE_DIR / 'cache/manifest.json'
-if not manifest_path.is_file():
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    token, seen = None, set()
-    while True:  # kernel output is paginated
-        cmd = [shutil.which('kaggle'), 'kernels', 'output', EXPERIMENT['cache_kernel'], '-p', str(CACHE_DIR), '--page-size', '200']
-        if token: cmd += ['--page-token', token]
-        done = subprocess.run(cmd, capture_output=True, text=True)
-        if done.returncode: raise RuntimeError('Kaggle download failed:\n' + redact(done.stderr + done.stdout)[-2000:])
-        nxt = re.search(r'Next page token:\s*(\S+)', done.stdout)
-        if not nxt: break
-        token = nxt.group(1); assert token not in seen, 'pagination loop'; seen.add(token)
-    found = list(CACHE_DIR.rglob('cache/manifest.json'))
-    assert len(found) == 1, f'expected one cache manifest, found {len(found)}'
-    manifest_path = found[0]
 import hashlib
-digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
-assert digest == EXPERIMENT['cache_manifest_sha256'], f'cache manifest mismatch: {digest}'
-print('Cache manifest verified:', manifest_path)
+part_manifests = []
+for part in EXPERIMENT['cache_parts']:  # one or more Kaggle cache outputs built with one policy
+    part_dir = Path('/content/rsna-input') / part['kernel'].split('/')[-1]
+    found = list(part_dir.rglob('cache/manifest.json'))
+    if not found:
+        part_dir.mkdir(parents=True, exist_ok=True)
+        token, seen = None, set()
+        while True:  # kernel output is paginated
+            cmd = [shutil.which('kaggle'), 'kernels', 'output', part['kernel'], '-p', str(part_dir), '--page-size', '200']
+            if token: cmd += ['--page-token', token]
+            done = subprocess.run(cmd, capture_output=True, text=True)
+            if done.returncode: raise RuntimeError('Kaggle download failed:\n' + redact(done.stderr + done.stdout)[-2000:])
+            nxt = re.search(r'Next page token:\s*(\S+)', done.stdout)
+            if not nxt: break
+            token = nxt.group(1); assert token not in seen, 'pagination loop'; seen.add(token)
+        found = list(part_dir.rglob('cache/manifest.json'))
+    assert len(found) == 1, f'expected one cache manifest in {part_dir}, found {len(found)}'
+    digest = hashlib.sha256(found[0].read_bytes()).hexdigest()
+    assert digest == part['manifest_sha256'], f'cache manifest mismatch for {part["kernel"]}: {digest}'
+    part_manifests.append(found[0])
+print('Cache part manifests verified:', [str(p) for p in part_manifests])
 '''
 
 PAYLOAD = r'''
@@ -142,6 +145,16 @@ from rsna_knee.data.cache_build import manifest_ready
 from rsna_knee.runtime.jobs import build_job
 from rsna_knee.runtime.transport import FileTransport
 from rsna_knee.runtime.worker import handshake, run_job
+if len(part_manifests) == 1:
+    manifest_path = part_manifests[0]
+else:  # move shard parts into one directory; manifest_ready below re-verifies every shard
+    from rsna_knee.data.cache_build import merge_cache_parts
+    merged_dir = Path('/content/rsna-input/merged-' + EXPERIMENT['cache_manifest_sha256'][:12]) / 'cache'
+    if not (merged_dir / 'manifest.json').is_file():
+        merge_cache_parts([m.parent for m in part_manifests], merged_dir)
+    manifest_path = merged_dir / 'manifest.json'
+EXPERIMENT['merged_manifest_sha256'] = sha256_file(manifest_path)
+(WORK / 'experiment.json').write_text(json.dumps(EXPERIMENT, indent=1))
 t0 = time.time()
 ready, reason = manifest_ready(manifest_path)  # re-hashes every shard, checks masks and shapes
 assert ready, reason
@@ -182,7 +195,13 @@ print('Result archive (download this one file):', archive_path)
 '''
 
 
-def generate(config_path: Path, *, cache_kernel: str, cache_manifest_sha256: str, ref: str, outer_fold: str) -> Path:
+def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha256s: list[str], ref: str,
+             outer_fold: str) -> Path:
+    if not cache_kernels or len(cache_kernels) != len(cache_manifest_sha256s):
+        raise SystemExit("give one manifest sha256 per cache kernel")
+    parts = [{"kernel": k, "manifest_sha256": s} for k, s in zip(cache_kernels, cache_manifest_sha256s, strict=True)]
+    # One id for the whole cache: the part manifest itself, or a hash over the ordered part hashes.
+    cache_id = parts[0]["manifest_sha256"] if len(parts) == 1 else _sha(",".join(cache_manifest_sha256s).encode())
     spec = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     exp_id = spec.get("experiment_id") or spec["id"]
     errors = validate_arm(spec, load_arms())
@@ -206,7 +225,7 @@ def generate(config_path: Path, *, cache_kernel: str, cache_manifest_sha256: str
         "id": exp_id, "hypothesis": spec.get("hypothesis"), "config_file": str(config_path.relative_to(ROOT)),
         "config_sha256": _sha(config_path.read_bytes()), "train": train, "outer_fold": outer_fold,
         "train_uids": uids, "train_uids_sha256": _sha("\n".join(uids).encode()),
-        "cache_kernel": cache_kernel, "cache_manifest_sha256": cache_manifest_sha256,
+        "cache_parts": parts, "cache_manifest_sha256": cache_id,
         "labels_sha256": _sha(labels), "labels_gz_sha256": _sha(labels_gz),
         "folds_file": str(folds_path.relative_to(ROOT)), "folds_sha256": _sha(folds),
         "source_sha256": _sha(archive), "n_source_files": len(names), **git_identity(ref),
@@ -244,13 +263,13 @@ def generate(config_path: Path, *, cache_kernel: str, cache_manifest_sha256: str
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("config", type=Path)
-    parser.add_argument("--cache-kernel", required=True)
-    parser.add_argument("--cache-manifest-sha256", required=True)
+    parser.add_argument("--cache-kernel", required=True, action="append", help="repeat for sharded caches")
+    parser.add_argument("--cache-manifest-sha256", required=True, action="append", help="one per --cache-kernel, same order")
     parser.add_argument("--ref", default="HEAD")
     parser.add_argument("--outer-fold", default="0")
     args = parser.parse_args()
-    out = generate(args.config.resolve(), cache_kernel=args.cache_kernel, cache_manifest_sha256=args.cache_manifest_sha256,
-                   ref=args.ref, outer_fold=args.outer_fold)
+    out = generate(args.config.resolve(), cache_kernels=args.cache_kernel,
+                   cache_manifest_sha256s=args.cache_manifest_sha256, ref=args.ref, outer_fold=args.outer_fold)
     print(out)
 
 

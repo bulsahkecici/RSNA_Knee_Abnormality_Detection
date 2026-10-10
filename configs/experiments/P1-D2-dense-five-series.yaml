@@ -4,18 +4,27 @@ phase: P1
 priority: 1
 status: prepared
 queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
-hypothesis: Two additional structural series improve dense model
-question: Do sagittal and coronal structural series (5 slots) add signal over D1's three fluid series?
+hypothesis: Five-series 0.6 mm/px coverage (v5 cache) improves the dense model
+question: >
+  Does the v5 cache — sagittal and coronal structural series added (5 slots), 154 mm crop
+  at 256 px (0.60 mm/px vs 0.71), one intensity window per series — improve over D1?
+package_change: >
+  Deliberately confounded: a single 5-slot 224 px shard layout changed D1's fluid fallback
+  and 384 px exceeded storage (P0 pilots, 2026-10-09). If D2 wins, ablate resolution and
+  slots separately before attributing the gain.
 control: D1
-changes: [cache]
+changes: [cache, train.img_size, train.resize_from_cache]
 folds: state/folds-v2-allgold.csv
 labels: {source: hard_masked, file: numeric labels jsonl, sha256: recorded_at_job_build}
 cache:
-  name: v4-dense-five-series
+  name: v5-five256-series-window
   storage: npz
+  shards: [bulsahkecici/rsna-v5-five256-shard0-20261010, bulsahkecici/rsna-v5-five256-shard1-20261010]
   slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid, Sagittal:structural, Coronal:structural]
   centers: 12
-  img_size: 224
+  img_size: 256
+  crop_mm: 154
+  intensity: series
   preprocess_hash: from_manifest
 weights: {encoder: dinov2_vits14, file: dinov2_vits14_pretrain.pth, sha256: configs/dinov2_vits14_allowlist.json}
 train:
@@ -28,7 +37,8 @@ train:
   unfreeze_after_epochs: 1
   layer_decay: null
   train_centers_per_slot: 6
-  img_size: 224
+  img_size: 252          # DINOv2 patch 14; resized on the fly from the 256 px cache
+  resize_from_cache: true
   epochs: 8
   effective_batch: 8
   microbatch: 1
