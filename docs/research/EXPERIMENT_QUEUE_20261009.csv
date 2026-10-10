@@ -5,7 +5,7 @@ MED1,1,Knee-pretrained OrthoFoundation frozen features complement generic DINO,A
 MED2,1,RadImageNet frozen features provide medical-CNN diversity,Artifact terms preprocessing and overlap audit,0,blocked_pending_host,UNKNOWN_NEEDS_HOST: private pretraining data; thread 745283 unanswered
 D0,1,New clean sparse DINO baseline under revised gold exclusion,P0 and official unsupervised initialization,1,notebook_ready,"notebooks/generated/D0.ipynb, v3 cache 8a233246"
 D1,1,Denser three-series image coverage improves learning,D0 and real dense cache QC,1,notebook_ready,cache 171ef4ff complete; notebooks/generated/D1.ipynb
-D2,1,Two additional structural series improve dense model,D1 and series-selection audit,1,cache_design,"256px/154mm/5 slots/series window, NPZ in 2 shards (27.8 GiB projected)"
+D2,1,Two additional structural series improve dense model,D1 and series-selection audit,1,notebook_ready,"v5 cache 2 shards 4407/4407 0 quarantine (e0803730, 4b308824); package change vs D1; notebooks/generated/D2.ipynb"
 D3,2,Four trainable DINO blocks improve domain adaptation,Best coverage recipe; same split and targets,1,planned,
 D4,2,Full DINO adaptation improves over partial fine-tuning,Memory/time pilot and staged learning rates,1,planned,
 D5,2,Finding attention helps with dense variable windows,Best coverage and matched mean baseline,1,planned,
