@@ -126,20 +126,63 @@ def download_part(kernel, part_dir, log_path, attempts=5, stall_seconds=900):
         print(f'  attempt {attempt}/{attempts} failed (exit {proc.returncode}):', error, flush=True)
         time.sleep(30 * attempt)
     raise RuntimeError(f'Kaggle download failed after {attempts} attempts:\n' + error)
+import tarfile
+DRIVE_CACHE = Path('/content/drive/MyDrive/RSNA/cache')  # one tar per verified cache part, reused by later runtimes
+def manifest_digest(part_dir):
+    found = list(part_dir.rglob('cache/manifest.json'))
+    assert len(found) == 1, f'expected one cache manifest in {part_dir}, found {len(found)}'
+    return found[0], hashlib.sha256(found[0].read_bytes()).hexdigest()
+def restore_from_drive(archive, part_dir, expected):
+    print('Restoring', archive.name, 'from Drive', flush=True)
+    started = time.time()
+    try:
+        with tarfile.open(archive) as tar:
+            tar.extractall(INPUT_ROOT, filter='data')
+        if manifest_digest(part_dir)[1] == expected:
+            print(f'  restored in {(time.time() - started) / 60:.1f} min', flush=True)
+            return True
+        print('  Drive copy has a different manifest', flush=True)
+    except (OSError, tarfile.TarError, AssertionError, TypeError) as exc:
+        print('  Drive copy unusable:', exc, flush=True)
+    shutil.rmtree(part_dir, ignore_errors=True)
+    archive.unlink(missing_ok=True)  # re-saved from the verified Kaggle download below
+    print('  removed it; falling back to the Kaggle download', flush=True)
+    return False
+def save_to_drive(part_dir, archive):
+    size = sum(f.stat().st_size for f in part_dir.rglob('*') if f.is_file())
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(archive.parent).free
+    if free < size * 1.05:
+        print(f'  not saved to Drive: needs {size / 2**30:.1f} GiB, {free / 2**30:.1f} GiB free', flush=True)
+        return
+    partial = archive.with_name(archive.name + '.partial')
+    print(f'Saving {size / 2**30:.1f} GiB to Drive as {archive.name} so later runtimes skip Kaggle', flush=True)
+    started = time.time()
+    try:
+        with tarfile.open(partial, 'w') as tar:  # .npz is already compressed
+            tar.add(part_dir, arcname=part_dir.name)
+        partial.rename(archive)
+        print(f'  saved in {(time.time() - started) / 60:.1f} min', flush=True)
+    except OSError as exc:
+        partial.unlink(missing_ok=True)
+        print('  not saved to Drive:', exc, flush=True)
 part_manifests = []
 for part in EXPERIMENT['cache_parts']:  # one or more Kaggle cache outputs built with one policy
     part_dir = INPUT_ROOT / part['kernel'].split('/')[-1]
     complete = INPUT_ROOT / (part_dir.name + '.download-complete')  # manifest.json can land before the shards
+    archive = DRIVE_CACHE / f"{part_dir.name}-{part['manifest_sha256'][:12]}.tar"
+    if not complete.is_file() and archive.is_file() and restore_from_drive(archive, part_dir, part['manifest_sha256']):
+        complete.touch()
     if not complete.is_file():
         part_dir.mkdir(parents=True, exist_ok=True)
         print('Downloading', part['kernel'], flush=True)
         download_part(part['kernel'], part_dir, INPUT_ROOT / (part_dir.name + '.log'))
         complete.touch()
-    found = list(part_dir.rglob('cache/manifest.json'))
-    assert len(found) == 1, f'expected one cache manifest in {part_dir}, found {len(found)}'
-    digest = hashlib.sha256(found[0].read_bytes()).hexdigest()
+    manifest, digest = manifest_digest(part_dir)
     assert digest == part['manifest_sha256'], f'cache manifest mismatch for {part["kernel"]}: {digest}'
-    part_manifests.append(found[0])
+    if not archive.is_file():  # only a part whose manifest matched is saved; shards are re-hashed before training
+        save_to_drive(part_dir, archive)
+    part_manifests.append(manifest)
 print('Cache part manifests verified:', [str(p) for p in part_manifests])
 '''
 
