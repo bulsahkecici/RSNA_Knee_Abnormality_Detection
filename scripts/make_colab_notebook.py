@@ -292,6 +292,8 @@ def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha2
     archive, names = source_archive(ref, extra=("configs", "pyproject.toml"))
     if "configs/dinov2_vits14_allowlist.json" not in names:
         raise SystemExit("source archive lacks the DINOv2 weight allowlist")
+    if train.get("encoder") != "dinov2_vits14":  # the notebook downloads and pins only the official DINOv2 file
+        raise SystemExit(f"encoder {train.get('encoder')!r}: only dinov2_vits14 weights are wired into the notebook")
     uids = train_uids(folds_path, labels, outer_fold)
     weights_sha = json.loads((ROOT / "configs/dinov2_vits14_allowlist.json").read_text())["sha256"][0]
     experiment = {
