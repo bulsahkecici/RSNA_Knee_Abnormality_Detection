@@ -16,8 +16,10 @@ reviewed — paired bootstrap deltas. Local validation only; never a leaderboard
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -31,9 +33,13 @@ from rsna_knee.ontology import TARGET_COLUMNS
 ROOT = Path(__file__).resolve().parents[1]
 LABELS = ROOT / "state/campaigns/campaign-20261003-v2/numeric-training.jsonl"
 FOLDS = ROOT / "state/folds-v2-allgold.csv"
-PINNED = ("git_commit", "source_sha256", "labels_sha256", "folds_sha256", "cache_manifest_sha256",
+PINNED = ("source_sha256", "labels_sha256", "folds_sha256", "cache_manifest_sha256",
           "weights_sha256", "soft_labels_sha256", "train_uids_sha256", "config_sha256")
 N_BOOT = 2000
+GENERATOR = "scripts/make_colab_notebook.py"
+# Cells that shape training or results. SETUP (pip, Drive) and AUTH_AND_CACHE (download; the cache is
+# pinned by manifest hash) may differ between the commit that ran and the commit that built the notebook.
+RESULT_CELLS = ("PAYLOAD", "TRAIN", "COLLECT")
 
 
 def out_dir(exp: str) -> Path:
@@ -78,12 +84,37 @@ def load_predictions(folder: Path) -> dict[str, np.ndarray]:
     return preds
 
 
-def verify(exp: str, folder: Path) -> dict:
+def _git(*args: str) -> str:
+    return subprocess.run(["git", *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout
+
+
+def _result_cells(commit: str) -> dict[str, str]:
+    tree = ast.parse(_git("show", f"{commit}:{GENERATOR}"))
+    return {node.targets[0].id: node.value.value for node in tree.body
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in RESULT_CELLS and isinstance(node.value, ast.Constant)}
+
+
+def commit_drift(ran: str, built: str) -> dict | None:
+    """Accept a run from an older notebook only when nothing that shapes results changed since."""
+    if ran == built:
+        return None
+    changed = _git("diff", "--name-only", ran, built).split()
+    if changed != [GENERATOR]:
+        raise ValueError(f"git_commit {ran[:7]} != built {built[:7]} and these changed: {changed}")
+    old, new = _result_cells(ran), _result_cells(built)
+    if old != new or set(old) != set(RESULT_CELLS):
+        raise ValueError(f"git_commit {ran[:7]} != built {built[:7]} and notebook result cells changed")
+    return {"ran": ran, "built": built, "changed": changed, "result_cells_identical": True}
+
+
+def verify(exp: str, folder: Path) -> tuple[dict, dict | None]:
     build = json.loads((ROOT / "notebooks/generated" / f"{exp}.build.json").read_text())
     ran = json.loads((folder / "experiment.json").read_text())
     mismatched = [k for k in PINNED if build.get(k) != ran.get(k)]
     if mismatched:
         raise ValueError(f"result was not produced by the generated notebook: {mismatched}")
+    drift = commit_drift(ran["git_commit"], build["git_commit"])
     if json.loads((folder / "campaign-result.json").read_text())["exit_reason"] != "ok":
         raise ValueError("training did not finish ok")
     metrics = json.loads((folder / "job/metrics.json").read_text())
@@ -93,7 +124,7 @@ def verify(exp: str, folder: Path) -> dict:
     if hashlib.sha256("\n".join(uids).encode()).hexdigest() != build["train_uids_sha256"]:
         raise ValueError("trained UIDs differ from the pinned list")
     assert_train_uids(set(uids), load_folds(FOLDS))
-    return metrics
+    return metrics, drift
 
 
 def score(preds: dict, labels: dict, uids: list[str]) -> tuple[float | None, dict, np.ndarray, np.ndarray]:
@@ -118,17 +149,20 @@ def paired_delta(y, p_new, p_old, seed=2026) -> dict:
 
 def review(exp: str) -> dict:
     folder = out_dir(exp)
-    metrics = verify(exp, folder)
+    metrics, drift = verify(exp, folder)
     preds, labels = load_predictions(folder), labels_table()
     folds = load_folds(FOLDS)
     gold_sets = {"gold_all": [r["StudyInstanceUID"] for r in folds if r.get("gold_set")]}
     for name in ("A_historic_eval", "B_former_train"):
         gold_sets[f"gold_{name}"] = [r["StudyInstanceUID"] for r in folds if r.get("gold_set") == name]
-    weak = sorted(u for u, (split, _) in preds.items() if split == "weak")
+    # Weak studies without a numeric label (none of our label rows) have nothing to score against.
+    weak = sorted(u for u, (split, _) in preds.items() if split == "weak" and u in labels)
     missing = [u for u in gold_sets["gold_all"] if u not in preds]
     if missing:
         raise ValueError(f"{len(missing)} gold studies have no prediction")
-    report: dict = {"experiment": exp, "kind": "local_validation_not_leaderboard", "splits": {}}
+    report: dict = {"experiment": exp, "kind": "local_validation_not_leaderboard", "git_commit_drift": drift,
+                    "weak_unlabeled_skipped": sum(1 for split, _ in preds.values() if split == "weak") - len(weak),
+                    "splits": {}}
     arrays = {}
     for name, uids in {**gold_sets, "weak_hard_labels": weak}.items():
         value, detail, y, p = score(preds, labels, sorted(uids))
@@ -149,9 +183,12 @@ def review(exp: str) -> dict:
         report["vs_control"] = {"control": control}
         for name in ("gold_all", "gold_A_historic_eval", "gold_B_former_train", "weak_hard_labels"):
             uids, y = arrays[name]
-            p_new = np.stack([preds[u][1] for u in uids])
-            p_old = np.stack([old[u][1] for u in uids])
-            report["vs_control"][name] = paired_delta(y, p_new, p_old)
+            keep = [i for i, u in enumerate(uids) if u in old]  # arms on different caches cover different weak studies
+            if name != "weak_hard_labels" and len(keep) != len(uids):
+                raise ValueError(f"control {control} lacks predictions for {name}")
+            p_new = np.stack([preds[uids[i]][1] for i in keep])
+            p_old = np.stack([old[uids[i]][1] for i in keep])
+            report["vs_control"][name] = paired_delta(y[keep], p_new, p_old) | {"n_paired": len(keep)}
     (folder / "review.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 
