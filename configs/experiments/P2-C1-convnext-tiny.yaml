@@ -5,15 +5,16 @@ priority: 2
 status: prepared
 queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
 hypothesis: ConvNeXt-Tiny learns complementary local evidence
-question: Does ConvNeXt-Tiny (ImageNet-1k, last stage of 3 blocks trained = 3/18 units, matching DINO's 2/12 depth fraction) match or complement D1 on identical labels, windows and split?
-control: D1
+question: Does ConvNeXt-Tiny (ImageNet-1k, last stage of 3 blocks trained = 3/18 units, matching DINO's 2/12 depth fraction) match or complement L1 on identical labels, windows and split?
+control: L1
 rebase_on: >
-  D1 is the provisional control. Before launch, rebase this arm and its control onto
-  the winning coverage arm among D0-D2 (cache and train_centers_per_slot), keeping
-  the declared change set exactly as listed.
+  Rebased 2026-10-12 from D1 to L1 under the L1S2 pre-registered rule (L1S2 - D1S2 gold_all
+  +0.025, ci95 [+0.005, +0.047]). Coverage stays v4 / 6 train centers: no D0-D2 coverage arm
+  won, and L1 is the best measured recipe on that cache. Declared changes are unchanged.
 changes: [weights, train.encoder, train.unfreeze_blocks]
 folds: state/folds-v2-allgold.csv
-labels: {source: hard_masked, file: numeric labels jsonl, sha256: recorded_at_job_build}
+labels: {source: public_mean_v1, file: state/soft-labels/public-mean-v1.jsonl,
+         sha256: 7d045805be5a8643dc6e1397ad8f71e7875003799a27fd11a05a6d5a9d916e04}
 cache:
   name: v4-dense-three-series
   storage: npz
@@ -26,7 +27,7 @@ train:
   profile: campaign
   encoder: convnext_tiny
   init: official_pretrained
-  label_source: hard_masked
+  label_source: public_mean_v1
   pooling: mean
   unfreeze_blocks: 3
   unfreeze_after_epochs: 1

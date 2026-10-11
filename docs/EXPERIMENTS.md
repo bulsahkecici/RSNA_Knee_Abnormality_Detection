@@ -325,3 +325,24 @@ Paired bootstrap deltas (2000 resamples) against each arm's pre-registered contr
 L1's per-class gold gains are broad (Medial OA +0.06, Lateral OA +0.08, Baker's +0.07, Contusion +0.08, ACL +0.06; MCL and Effusion flat), consistent with the 2026-10-10 label audit that put our hard labels' own gold agreement (0.804) near the previous image-model ceiling. Caveats: one seed, 58 gold studies, gold A was used for earlier selection, and L1 is the only CI-excluding-zero result among three comparisons.
 
 **Decision:** before D3–D5 change their base labels, replicate L1 at a second seed against a same-seed control. Pre-registered pair `D1S2` (D1, seed 2027) and `L1S2` (L1, seed 2027, control D1S2); the success rule is in `configs/experiments/P1-L1S2-soft-public-labels-seed2027.yaml` and was fixed before either run. D2's v5 cache is parked; 384 px is not pursued.
+
+### 2026-10-12 — L1 replicated at seed 2027; D3–D5, C1, C2 rebased onto L1
+
+D1S2 and L1S2 (D1 and L1 at seed 2027, otherwise identical; notebook `589d8b1`, Colab A100, ~61 min each) both passed `scripts/review_experiment.py`.
+
+| Arm | gold all | gold A | gold B | weak (837) |
+|---|---:|---:|---:|---:|
+| D1 (seed 2026) | 0.752 | 0.783 | 0.718 | 0.806 |
+| D1S2 (seed 2027) | 0.748 | 0.774 | 0.708 | 0.806 |
+| L1 (seed 2026) | 0.783 | 0.816 | 0.733 | 0.796 |
+| L1S2 (seed 2027) | 0.774 | 0.805 | 0.732 | 0.796 |
+
+| Comparison | gold all Δ [95% CI] | weak Δ [95% CI] |
+|---|---|---|
+| D1S2 − D1 (seed noise) | −0.004 [−0.018, +0.010] | −0.000 [−0.004, +0.004] |
+| L1S2 − D1S2 | **+0.025 [+0.005, +0.047]** | −0.011 [−0.019, −0.003] |
+| L1 − D1 (from 2026-10-11) | +0.031 [+0.009, +0.052] | −0.010 [−0.018, −0.004] |
+
+**Verdict under the pre-registered L1S2 rule: replicated** (CI lower bound > 0). The seed-to-seed gap of the hard-label control (−0.004) is small next to the label effect. Per-class gold deltas repeat across seeds: Lateral OA +0.08/+0.07, Contusion +0.08/+0.07, Baker's +0.07/+0.07, Medial OA +0.06/+0.05, ACL +0.06/+0.03, Fracture +0.03/+0.02. **Lateral Meniscus drops in both seeds (−0.04/−0.05)**, the one consistent loss — a candidate for a per-target label check, not acted on here (58 gold studies). The weak drop repeats too and is expected: weak is scored against the hard labels L1 no longer trains on.
+
+**Action taken (rule fixed before the seed-2027 runs):** D3, D4, D5, C1 and C2 now use control L1 and public-mean-v1 soft labels; coverage stays v4 with 6 train centers, because no D0–D2 coverage arm won and L1 is the best measured recipe on that cache. Each arm's declared change set is unchanged and passes `validate_arm`. Suggested order: D3, D5, C1, C2, then D4 (its memory/time pilot is still open; ViT-S peaked at 0.45 GB on A100 so far).
