@@ -3,15 +3,17 @@ P0,0,Fixed grouped folds; real dense-cache pilot; numeric-label disagreement aud
 REF,0,Reproduce one eligible public reader as REFERENCE,Version license training-origin and overlap audit,0,planned,see PUBLIC_RECIPES_20261009.md
 MED1,1,Knee-pretrained OrthoFoundation frozen features complement generic DINO,Artifact availability upstream terms and external-data eligibility unresolved,0,blocked_pending_host,UNKNOWN_NEEDS_HOST: OAI+private cohort; DINOv3 derivative terms (P0_SOURCE_AUDIT)
 MED2,1,RadImageNet frozen features provide medical-CNN diversity,Artifact terms preprocessing and overlap audit,0,blocked_pending_host,UNKNOWN_NEEDS_HOST: private pretraining data; thread 745283 unanswered
-D0,1,New clean sparse DINO baseline under revised gold exclusion,P0 and official unsupervised initialization,1,notebook_ready,"notebooks/generated/D0.ipynb, v3 cache 8a233246"
-D1,1,Denser three-series image coverage improves learning,D0 and real dense cache QC,1,notebook_ready,cache 171ef4ff complete; notebooks/generated/D1.ipynb
-D2,1,Two additional structural series improve dense model,D1 and series-selection audit,1,notebook_ready,"v5 cache 2 shards 4407/4407 0 quarantine (e0803730, 4b308824); package change vs D1; notebooks/generated/D2.ipynb"
+D0,1,New clean sparse DINO baseline under revised gold exclusion,P0 and official unsupervised initialization,1,done,2026-10-11 gold 0.740 weak 0.807; control for D1
+D1,1,Denser three-series image coverage improves learning,D0 and real dense cache QC,1,done_not_supported,"2026-10-11 gold 0.752 (vs D0 +0.012 CI [-0.004,0.027]); weak sign disagrees; remains control for L1/D3-D5"
+D2,1,Two additional structural series improve dense model,D1 and series-selection audit,1,done_not_supported,"2026-10-11 gold 0.748 (vs D1 -0.004 CI [-0.027,0.023]); weak -0.012 significant; 105 min; v5 cache parked"
 D3,2,Four trainable DINO blocks improve domain adaptation,Best coverage recipe; same split and targets,1,planned,
 D4,2,Full DINO adaptation improves over partial fine-tuning,Memory/time pilot and staged learning rates,1,planned,
 D5,2,Finding attention helps with dense variable windows,Best coverage and matched mean baseline,1,planned,
 C1,2,ConvNeXt-Tiny learns complementary local evidence,Same labels windows split; independent pretrained initialization,1,prepared_code,timm ConvNeXt-T eligible (Apache-2.0/ MIT)
 C2,2,CoAtNet-0/1 learns stronger window representations,Same labels windows split; resource pilot,1,prepared_code,timm coatnet_0_rw_224.sw_in1k eligible (Apache-2.0)
 CV,3,Best two families improve consistently across three outer folds,P1/P2 finished; independent fold initializations,4,conditional,
-L1,3,Audited alternative numeric supervision improves best recipe,Original validation targets frozen; masks preserved,1,notebook_ready,"promoted: control D1, public-mean-v1 soft labels 7d045805; notebooks/generated/L1.ipynb"
+L1,3,Audited alternative numeric supervision improves best recipe,Original validation targets frozen; masks preserved,1,done_supported_one_seed,"2026-10-11 gold 0.783 (vs D1 +0.031 CI [0.009,0.052]); weak -0.010 non-decisive; replicate via D1S2/L1S2"
+D1S2,1,Seed-2027 control for the L1 replication (D1 unchanged except seed),D1 result,1,notebook_ready,notebooks/generated/D1S2.ipynb; v4 cache 171ef4ff
+L1S2,1,L1 gold gain over D1 replicates at a second seed,D1S2 run; rule fixed before both runs,1,notebook_ready,control D1S2; public-mean-v1 7d045805; success = gold_all ci95 lower > 0
 T1,4,Inner-crossfit image teachers improve student on outer holdout,Exclude outer validation from every teacher; version soft targets,4,conditional,
 ALT,4,Best medical encoder or patch summary adds useful diversity,MED probes or current-model feature audit supports benefit,1,conditional,

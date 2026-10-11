@@ -1,0 +1,55 @@
+# L1S2: replication of L1 at a second seed, pre-registered 2026-10-11 after L1's first result. Prepared, not run.
+experiment_id: L1S2
+phase: P1
+priority: 1
+status: prepared
+queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
+hypothesis: L1's gold gain over D1 from public CC0 soft labels replicates at a second seed
+question: >
+  L1 (seed 2026) beat D1 on gold_all by +0.031, 95% CI [+0.009, +0.052], single seed. With
+  everything else identical to L1 and seed 2027 on both arms, does the gain hold against
+  D1S2? Decides whether public-mean-v1 soft labels become the base for D3-D5.
+evidence: >
+  2026-10-11 reviews (docs/EXPERIMENTS.md): L1 gold_all 0.783 vs D1 0.752; weak AUC fell
+  0.010, expected because weak is scored against the hard labels L1 no longer trains on.
+control: D1S2
+changes: [labels, train.label_source]
+folds: state/folds-v2-allgold.csv
+labels: {source: public_mean_v1, file: state/soft-labels/public-mean-v1.jsonl,
+         sha256: 7d045805be5a8643dc6e1397ad8f71e7875003799a27fd11a05a6d5a9d916e04}
+cache:
+  name: v4-dense-three-series
+  storage: npz
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid]
+  centers: 12
+  img_size: 224
+  preprocess_hash: from_manifest
+weights: {encoder: dinov2_vits14, file: dinov2_vits14_pretrain.pth, sha256: configs/dinov2_vits14_allowlist.json}
+train:
+  profile: campaign
+  encoder: dinov2_vits14
+  init: official_pretrained
+  label_source: public_mean_v1
+  pooling: mean
+  unfreeze_blocks: 2
+  unfreeze_after_epochs: 1
+  layer_decay: null
+  train_centers_per_slot: 6
+  img_size: 224
+  epochs: 8
+  effective_batch: 8
+  microbatch: 1
+  seed: 2027
+  lr_head: 0.0001
+  lr_backbone: 0.00001
+evaluation: {windows: all_centers, tta: null, splits: [gold, weak], targets: fixed hard masked labels}
+measure: [gold_macro_auc, weak_macro_auc, per_class_auc, epoch_wall_seconds, seconds_per_train_study,
+          peak_cuda_memory_bytes, evaluation_seconds, skipped_updates]
+note: Evaluation encodes 2x the windows of D0; inference runtime must be re-measured.
+max_full_runs: 1
+decision_criterion: >
+  Fixed before either seed-2027 run. Replicated if the paired gold_all bootstrap delta vs D1S2
+  has ci95 lower bound > 0: then D3-D5 move to public-mean-v1 labels. If the point delta is
+  > 0 but the interval includes 0, report a partial replication and keep D1 labels as the
+  base. If the point delta is <= 0, L1's first result is treated as seed noise. Weak AUC is
+  not decisive (scored against hard labels L1S2 does not train on). Gold A/B are reported only.

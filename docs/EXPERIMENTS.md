@@ -302,3 +302,26 @@ No lossless option fits one 18 GiB kernel output. Next coverage cache: 256 px / 
 **Prepared Colab notebooks** (gitignored, embed private numeric labels): `notebooks/generated/D0.ipynb` (v3 six-center cache, official init), `D1.ipynb` (dense 12-window cache), `L1.ipynb` (D1 + public soft labels). All pin git `963c8b5`, folds-v2 `e27530d2…`, 3341 train UIDs, official DINOv2 `b938bf1b…`; outputs and checkpoints on Drive with resume. Results are ingested with `scripts/review_experiment.py <ID> --zip <colab-results.zip>`, which re-verifies every pinned hash and the folds-v2 leakage check and reports gold-all / gold-A / gold-B / weak plus paired deltas vs the control arm. No result exists yet for any of these arms.
 
 **v5 coverage cache complete (2026-10-10)** — `bulsahkecici/rsna-v5-five256-shard{0,1}-20261010` v1: 2204 + 2203 = 4407 studies, 0 quarantine, identical preprocess hash `8dd9d9d8…` (5 slots, 12 windows, 256 px, 154 mm crop, series intensity window), part manifests `e0803730…` / `4b308824…`, 15.4 + 15.3 GiB, ~85 min each on 4 workers, every shard re-verified in-kernel. Slot presence: all 5 in 3082 studies, 4 in 1092, 3 in 233; coronal structural absent in ~1000 studies (masked). D2 now targets this cache with DINOv2 at 252 px (resized from 256, recorded) — a declared package change vs D1; ablate resolution vs slots only if D2 wins. Local rehearsal (two synthetic shards → `merge_cache_parts` → `manifest_ready` → `run_job`) finished `ok`. Notebooks D0, D1, L1, D2 regenerated from git `61d7432`.
+
+### 2026-10-11 — P1 results: D0, D1, D2, L1 (local validation, not leaderboard)
+
+All four ran on Colab A100 80 GB, outer fold 0, folds-v2 (58 gold excluded from training), 3341 train UIDs, official DINOv2 ViT-S/14, seed 2026, one run each. Every archive passed `scripts/review_experiment.py`: pinned hashes, exit `ok`, `kind: real`, train-UID hash and folds-v2 leakage check. D1 and L1 ran from notebook commit `9ca062c`; the notebooks were later regenerated (`8bde598`) for download-cell fixes only, and the review accepted the drift because only `scripts/make_colab_notebook.py` changed and its payload/train/collect cells are identical (recorded as `git_commit_drift` in `review.json`). v4/v5 caches cover 32 fold-0 weak studies with no numeric label; they are skipped in weak AUC.
+
+| Arm | gold all (58) | gold A (29) | gold B (29) | weak (n) | wall |
+|---|---:|---:|---:|---:|---:|
+| D0 v3 sparse | 0.740 | 0.784 | 0.683 | 0.807 (819) | 26 min |
+| D1 v4 dense 12 | 0.752 | 0.783 | 0.718 | 0.806 (837) | 62 min |
+| D2 v5 five-series 252 px | 0.748 | 0.769 | 0.732 | 0.794 (837) | 105 min |
+| L1 D1 + public-mean-v1 | 0.783 | 0.816 | 0.733 | 0.796 (837) | 62 min |
+
+Paired bootstrap deltas (2000 resamples) against each arm's pre-registered control:
+
+| Arm vs control | gold all Δ [95% CI] | weak Δ [95% CI] | Verdict under its decision criterion |
+|---|---|---|---|
+| D1 − D0 | +0.012 [−0.004, +0.027] | −0.001 [−0.006, +0.003] (n 819) | not supported: gold CI includes 0, weak sign disagrees |
+| D2 − D1 | −0.004 [−0.027, +0.023] | −0.012 [−0.019, −0.006] | not supported; series-selection audit never implemented; 1.7× slower |
+| L1 − D1 | **+0.031 [+0.009, +0.052]** | −0.010 [−0.018, −0.004] | supported (weak drop non-decisive by pre-registration) |
+
+L1's per-class gold gains are broad (Medial OA +0.06, Lateral OA +0.08, Baker's +0.07, Contusion +0.08, ACL +0.06; MCL and Effusion flat), consistent with the 2026-10-10 label audit that put our hard labels' own gold agreement (0.804) near the previous image-model ceiling. Caveats: one seed, 58 gold studies, gold A was used for earlier selection, and L1 is the only CI-excluding-zero result among three comparisons.
+
+**Decision:** before D3–D5 change their base labels, replicate L1 at a second seed against a same-seed control. Pre-registered pair `D1S2` (D1, seed 2027) and `L1S2` (L1, seed 2027, control D1S2); the success rule is in `configs/experiments/P1-L1S2-soft-public-labels-seed2027.yaml` and was fixed before either run. D2's v5 cache is parked; 384 px is not pursued.

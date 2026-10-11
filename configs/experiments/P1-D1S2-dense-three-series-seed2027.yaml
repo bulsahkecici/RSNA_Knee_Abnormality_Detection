@@ -1,0 +1,45 @@
+# D1S2: D1 at a second seed, the hard-label half of the L1 replication pair (2026-10-11). Prepared, not run.
+experiment_id: D1S2
+phase: P1
+priority: 1
+status: prepared
+queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
+hypothesis: Control for L1S2 - D1 unchanged except the training seed
+question: >
+  Same as D1 with seed 2027. Not a test of its own: it is the paired control that lets
+  L1S2 check whether L1's gold gain over D1 survives a new seed.
+control: D1
+changes: [train.seed]
+folds: state/folds-v2-allgold.csv
+labels: {source: hard_masked, file: numeric labels jsonl, sha256: recorded_at_job_build}
+cache:
+  name: v4-dense-three-series
+  storage: npz
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid]
+  centers: 12
+  img_size: 224
+  preprocess_hash: from_manifest
+weights: {encoder: dinov2_vits14, file: dinov2_vits14_pretrain.pth, sha256: configs/dinov2_vits14_allowlist.json}
+train:
+  profile: campaign
+  encoder: dinov2_vits14
+  init: official_pretrained
+  label_source: hard_masked
+  pooling: mean
+  unfreeze_blocks: 2
+  unfreeze_after_epochs: 1
+  layer_decay: null
+  train_centers_per_slot: 6
+  img_size: 224
+  epochs: 8
+  effective_batch: 8
+  microbatch: 1
+  seed: 2027
+  lr_head: 0.0001
+  lr_backbone: 0.00001
+evaluation: {windows: all_centers, tta: null, splits: [gold, weak], targets: fixed hard masked labels}
+measure: [gold_macro_auc, weak_macro_auc, per_class_auc, epoch_wall_seconds, seconds_per_train_study,
+          peak_cuda_memory_bytes, evaluation_seconds, skipped_updates]
+note: Evaluation encodes 2x the windows of D0; inference runtime must be re-measured.
+max_full_runs: 1
+decision_criterion: None of its own; the D1S2 - D1 gap is reported as seed noise for the L1 replication.
