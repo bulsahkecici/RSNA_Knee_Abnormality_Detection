@@ -45,6 +45,6 @@ def test_an_undeclared_change_is_rejected():
 
 
 def test_family_depths_match_the_dino_fraction_where_declared():
-    assert ARMS["C1"]["train"]["unfreeze_blocks"] == 3  # 3/18 ConvNeXt blocks = 2/12 ViT blocks
-    assert ARMS["C2"]["train"]["unfreeze_blocks"] == 1  # last CoAtNet stage
+    assert ARMS["C1"]["train"]["unfreeze_blocks"] == 6  # 6/18 ConvNeXt blocks = D3's 4/12 ViT blocks
+    assert ARMS["C2"]["train"]["unfreeze_blocks"] == 2  # both CoAtNet transformer stages (no stage count is 1/3)
     assert ARMS["D4"]["train"]["unfreeze_blocks"] == "all" and ARMS["D4"]["train"]["layer_decay"] == 0.75

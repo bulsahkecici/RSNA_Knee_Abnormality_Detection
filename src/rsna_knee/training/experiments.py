@@ -16,21 +16,22 @@ from rsna_knee.models.families import get_family, normalize_unfreeze, validate_i
 from rsna_knee.models.study import POOLING_VERSIONS
 from rsna_knee.paths import CONFIG_DIR
 
-QUEUE_IDS = ("D0", "D1", "D2", "D3", "D4", "D5", "C1", "C2", "L1", "D1S2", "L1S2", "D3S2")
+QUEUE_IDS = ("D0", "D1", "D2", "D3", "D4", "D5", "C1", "C2", "L1", "D1S2", "L1S2", "D3S2",
+             "L1F1", "D3F1", "L1F2", "D3F2")
 FOLDS = "state/folds-v2-allgold.csv"
 # Whole-section identities: any difference inside counts as one change.
-SECTIONS = ("folds", "labels", "cache", "weights")
+SECTIONS = ("folds", "labels", "cache", "weights", "outer_fold")  # outer_fold absent = "0"
 TRAIN_KEYS = {
     "profile", "encoder", "init", "label_source", "pooling", "aggregator", "aggregator_layers",
     "aggregator_heads", "unfreeze_blocks", "unfreeze_after_epochs", "unfreeze_after_steps", "layer_decay",
     "train_centers_per_slot", "img_size", "resize_from_cache", "tta", "epochs", "effective_batch",
-    "microbatch", "seed", "lr_head", "lr_backbone", "phase", "resume",
+    "microbatch", "seed", "lr_head", "lr_backbone", "phase", "resume", "outer_fold",
 }
 
 
 def load_arms(directory: Path | None = None) -> dict[str, dict[str, Any]]:
     arms: dict[str, dict[str, Any]] = {}
-    for path in sorted((directory or CONFIG_DIR / "experiments").glob("P[12]-*.yaml")):
+    for path in sorted((directory or CONFIG_DIR / "experiments").glob("P[1-3]-*.yaml")):
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         data["_path"] = str(path)
         if data.get("experiment_id") in arms:
@@ -58,6 +59,8 @@ def validate_arm(arm: dict[str, Any], arms: dict[str, dict[str, Any]]) -> list[s
         errors.append("hypothesis_missing")
     if arm.get("folds") != FOLDS:
         errors.append("folds_not_allgold")
+    if arm.get("outer_fold") is not None and arm["outer_fold"] not in {"1", "2", "3", "4"}:
+        errors.append("invalid_outer_fold")  # fold 0 is the default and is never written
     if set(train) - TRAIN_KEYS:
         errors.append(f"unknown_train_keys:{sorted(set(train) - TRAIN_KEYS)}")
     if train.get("init") != "official_pretrained":

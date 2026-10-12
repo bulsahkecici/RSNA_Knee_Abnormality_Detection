@@ -280,7 +280,7 @@ print('Result archive (download this one file):', archive_path)
 
 
 def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha256s: list[str], ref: str,
-             outer_fold: str) -> Path:
+             outer_fold: str | None) -> Path:
     if not cache_kernels or len(cache_kernels) != len(cache_manifest_sha256s):
         raise SystemExit("give one manifest sha256 per cache kernel")
     parts = [{"kernel": k, "manifest_sha256": s} for k, s in zip(cache_kernels, cache_manifest_sha256s, strict=True)]
@@ -291,8 +291,15 @@ def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha2
     errors = validate_arm(spec, load_arms())
     if errors:
         raise SystemExit(f"{exp_id} fails experiment validation: {errors}")
+    configured = spec.get("outer_fold", "0")
+    if outer_fold is None:
+        outer_fold = configured
+    if outer_fold != configured:
+        raise SystemExit(f"{exp_id}: --outer-fold {outer_fold} disagrees with the config's outer fold {configured}")
     train = job_train_spec(spec)
-    train["resume"] = True  # checkpoint lives on Drive, so Run All after a disconnect resumes; not run identity
+    train["resume"] = True
+    if outer_fold != "0":  # the worker holds this fold out as the weak split; fold 0 stays implicit
+        train["outer_fold"] = outer_fold  # checkpoint lives on Drive, so Run All after a disconnect resumes; not run identity
     soft = b""
     if train.get("label_source", "hard_masked") != "hard_masked":
         soft_path = ROOT / spec["labels"]["file"]
@@ -366,7 +373,7 @@ def main() -> None:
     parser.add_argument("--cache-kernel", required=True, action="append", help="repeat for sharded caches")
     parser.add_argument("--cache-manifest-sha256", required=True, action="append", help="one per --cache-kernel, same order")
     parser.add_argument("--ref", default="HEAD")
-    parser.add_argument("--outer-fold", default="0")
+    parser.add_argument("--outer-fold", help="defaults to the config's outer_fold, else 0; must agree with it")
     args = parser.parse_args()
     out = generate(args.config.resolve(), cache_kernels=args.cache_kernel,
                    cache_manifest_sha256s=args.cache_manifest_sha256, ref=args.ref, outer_fold=args.outer_fold)

@@ -211,12 +211,12 @@ def assert_split_disjoint(
         raise LeakageError(f"group_crosses_splits:{crossed[0]}")
 
 
-def pilot_splits(folds: list[dict[str, str]]) -> tuple[list[str], list[str], list[str]]:
-    """Train on image-training UIDs outside fold 0. Fold 0 is the weak holdout. Gold eval stays out."""
+def pilot_splits(folds: list[dict[str, str]], outer_fold: str = "0") -> tuple[list[str], list[str], list[str]]:
+    """Train on image-training UIDs outside the outer fold, which is the weak holdout. Gold eval stays out."""
     trainable = image_training_uids(folds)
     by_uid = {row["StudyInstanceUID"]: row for row in folds}
-    train = [uid for uid in trainable if str(by_uid[uid].get("fold")) != "0"]
-    weak = [uid for uid in trainable if str(by_uid[uid].get("fold")) == "0"]
+    train = [uid for uid in trainable if str(by_uid[uid].get("fold")) != outer_fold]
+    weak = [uid for uid in trainable if str(by_uid[uid].get("fold")) == outer_fold]
     gold = [row["StudyInstanceUID"] for row in folds if row.get("gold_split") == "eval"]
     if not train:
         train = list(trainable)
@@ -387,7 +387,8 @@ def prepare_training(job: dict[str, Any], job_dir: Path) -> tuple[dict[str, Any]
         except (ValueError, TypeError, json.JSONDecodeError):
             return None, "soft_labels_invalid"
     requested = job.get("train_uids")
-    train_uids, weak_uids, gold_uids = pilot_splits(folds)
+    # Absent outer_fold keeps fold 0, so fold-0 train specs stay byte-identical.
+    train_uids, weak_uids, gold_uids = pilot_splits(folds, str((job.get("train") or {}).get("outer_fold", "0")))
     if requested is not None:
         train_uids = [str(uid) for uid in requested]
     try:

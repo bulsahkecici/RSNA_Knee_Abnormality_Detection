@@ -5,12 +5,11 @@ priority: 2
 status: prepared
 queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
 hypothesis: ConvNeXt-Tiny learns complementary local evidence
-question: Does ConvNeXt-Tiny (ImageNet-1k, last stage of 3 blocks trained = 3/18 units, matching DINO's 2/12 depth fraction) match or complement L1 on identical labels, windows and split?
-control: L1
+question: Does ConvNeXt-Tiny (ImageNet-1k, last 6 of 18 blocks trained = 1/3 of units, matching D3's 4/12) match or complement D3 on identical labels, windows and split?
+control: D3
 rebase_on: >
-  Rebased 2026-10-12 from D1 to L1 under the L1S2 pre-registered rule (L1S2 - D1S2 gold_all
-  +0.025, ci95 [+0.005, +0.047]). Coverage stays v4 / 6 train centers: no D0-D2 coverage arm
-  won, and L1 is the best measured recipe on that cache. Declared changes are unchanged.
+  Rebased 2026-10-12 from L1 to D3, the replicated base recipe (D3 - L1 +0.038, D3S2 - L1S2 +0.040).
+  Trainable depth is scaled to D3's fraction of encoder units (4/12 = 1/3): ConvNeXt-T 6 of 18 blocks (last stage + last 3 of stage 3).
 changes: [weights, train.encoder, train.unfreeze_blocks]
 folds: state/folds-v2-allgold.csv
 labels: {source: public_mean_v1, file: state/soft-labels/public-mean-v1.jsonl,
@@ -29,7 +28,7 @@ train:
   init: official_pretrained
   label_source: public_mean_v1
   pooling: mean
-  unfreeze_blocks: 3
+  unfreeze_blocks: 6
   unfreeze_after_epochs: 1
   layer_decay: null
   train_centers_per_slot: 6
@@ -44,4 +43,4 @@ evaluation: {windows: all_centers, tta: null, splits: [gold, weak], targets: fix
 measure: [gold_macro_auc, weak_macro_auc, per_class_auc, epoch_wall_seconds, seconds_per_train_study,
           peak_cuda_memory_bytes, evaluation_seconds, skipped_updates]
 max_full_runs: 1
-decision_criterion: Paired gold bootstrap delta vs the control with uncertainty; weak delta must agree in sign.
+decision_criterion: Paired gold bootstrap delta vs D3 with uncertainty; weak delta must agree in sign. The D3 + this arm probability average is reported descriptively.

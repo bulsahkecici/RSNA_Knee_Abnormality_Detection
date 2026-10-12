@@ -1,0 +1,46 @@
+# L1F1: L1 on outer fold 1, the control half of the D3 cross-validation pair. Prepared, not run.
+experiment_id: L1F1
+phase: P3
+priority: 1
+status: prepared
+queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
+hypothesis: Control for D3F1 - L1 unchanged except the outer holdout fold
+question: >
+  Same as L1 with outer fold 1 held out. Not a test of its own: paired control for D3F1.
+control: L1
+changes: [outer_fold]
+outer_fold: "1"
+folds: state/folds-v2-allgold.csv
+labels: {source: public_mean_v1, file: state/soft-labels/public-mean-v1.jsonl,
+         sha256: 7d045805be5a8643dc6e1397ad8f71e7875003799a27fd11a05a6d5a9d916e04}
+cache:
+  name: v4-dense-three-series
+  storage: npz
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid]
+  centers: 12
+  img_size: 224
+  preprocess_hash: from_manifest
+weights: {encoder: dinov2_vits14, file: dinov2_vits14_pretrain.pth, sha256: configs/dinov2_vits14_allowlist.json}
+train:
+  profile: campaign
+  encoder: dinov2_vits14
+  init: official_pretrained
+  label_source: public_mean_v1
+  pooling: mean
+  unfreeze_blocks: 2
+  unfreeze_after_epochs: 1
+  layer_decay: null
+  train_centers_per_slot: 6
+  img_size: 224
+  epochs: 8
+  effective_batch: 8
+  microbatch: 1
+  seed: 2026
+  lr_head: 0.0001
+  lr_backbone: 0.00001
+evaluation: {windows: all_centers, tta: null, splits: [gold, weak], targets: fixed hard masked labels}
+measure: [gold_macro_auc, weak_macro_auc, per_class_auc, epoch_wall_seconds, seconds_per_train_study,
+          peak_cuda_memory_bytes, evaluation_seconds, skipped_updates]
+note: Evaluation encodes 2x the windows of D0; inference runtime must be re-measured.
+max_full_runs: 1
+decision_criterion: None of its own; see the CV rule in D3F1/D3F2.

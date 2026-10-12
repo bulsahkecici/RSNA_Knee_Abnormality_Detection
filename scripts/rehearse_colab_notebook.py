@@ -135,13 +135,13 @@ print(json.dumps({'train_cell': 'ok', 'archive_bytes': ns['archive_path'].stat()
 
 
 def _child(exp_id: str, src: list[str], run: Path, scratch: Path, parts: list[Path], uids: list[str],
-           *, weights: Path, break_allowlist: bool) -> subprocess.CompletedProcess:
+           *, weights: Path, break_allowlist: bool, outer_fold: str) -> subprocess.CompletedProcess:
     cwd = run / "empty-cwd"
     cwd.mkdir(parents=True, exist_ok=True)
     spec = {"cells": src, "work": str(run / "work"), "input_root": str(run / "input-root"),
             "folds": str(scratch / "folds.csv"), "labels": str(scratch / "labels.jsonl"),
             "soft": str(scratch / "soft.jsonl"), "parts": [str(p) for p in parts],
-            "train_uids": [u for k, u in enumerate(uids) if k >= 3 and k % 5 != 0],
+            "train_uids": [u for k, u in enumerate(uids) if k >= 3 and str(k % 5) != outer_fold],
             "weights": str(weights), "break_allowlist": break_allowlist}
     (run / "spec.json").write_text(json.dumps(spec))
     (run / "child.py").write_text(CHILD)
@@ -159,10 +159,11 @@ def rehearse(exp_id: str, scratch: Path) -> None:
     parts = synthetic_parts(scratch, {"id": exp_id, **exp}, root, uids)
     weights = ROOT / "artifacts/weights" / exp.get("weights_file", "dinov2_vits14_pretrain.pth")  # real pretrained file
     # 1) a run that fails at the weight check, 2) Run All again in the same Drive folder.
-    failed = _child(exp_id, src, run, scratch, parts, uids, weights=weights, break_allowlist=True)
+    outer_fold = str(exp.get("outer_fold", "0"))
+    failed = _child(exp_id, src, run, scratch, parts, uids, weights=weights, break_allowlist=True, outer_fold=outer_fold)
     if failed.returncode != 3 or "unverified_weights" not in failed.stdout:
         raise SystemExit(f"{exp_id}: expected an unverified_weights failure\n{failed.stdout[-1500:]}\n{failed.stderr[-3000:]}")
-    done = _child(exp_id, src, run, scratch, parts, uids, weights=weights, break_allowlist=False)
+    done = _child(exp_id, src, run, scratch, parts, uids, weights=weights, break_allowlist=False, outer_fold=outer_fold)
     if done.returncode != 0:
         raise SystemExit(f"{exp_id}: rehearsal failed\n{done.stdout[-1500:]}\n{done.stderr[-4000:]}")
     print(json.dumps({"experiment": exp_id, "rehearsal": "ok", "rerun_after_failure": "ok",
