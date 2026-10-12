@@ -376,3 +376,18 @@ Notebook `62a7f8d`, Colab **A100 40 GB** (others ran on 80 GB), passed review. G
 | D4 − D3 (descriptive, not pre-registered) | −0.003 [−0.018, +0.010] | +0.000 [−0.004, +0.005] |
 
 Supported against L1, but indistinguishable from D3 while costing ~1.3× wall time and 2.5× memory; per-class differences vs D3 are all within ±0.02. **D3 (last four blocks) is the working recipe.** Before it becomes the base, D3S2 repeats D3 at seed 2027 against the existing L1S2 run (one extra run instead of two); its rule is fixed in `configs/experiments/P1-D3S2-four-blocks-seed2027.yaml`.
+
+### 2026-10-12 — D3 replicated at seed 2027; D3 is the base recipe
+
+D3S2 (D3 at seed 2027, notebook `1fb673a`, A100 40 GB, 66 min, peak 0.74 GB) passed review. Gold all 0.814, gold A 0.841, gold B 0.788, weak 0.825.
+
+| Comparison | gold all Δ [95% CI] | weak Δ [95% CI] |
+|---|---|---|
+| D3 − L1 (seed 2026) | +0.038 [+0.020, +0.059] | +0.027 [+0.020, +0.035] |
+| **D3S2 − L1S2 (seed 2027)** | **+0.040 [+0.022, +0.060]** | +0.030 [+0.023, +0.036] |
+
+**Verdict under the pre-registered D3S2 rule: replicated** (gold CI lower bound > 0, weak positive). Gold A and gold B rise in both seeds. Per-class gains repeat for MCL, Medial OA, Contusion, Fracture (+0.13/+0.15), Medial Meniscus, ACL and PF OA; Lateral OA dips in both (−0.02/−0.02). Combined path from our hard labels: D1 0.752 → L1 0.783 → D3 0.820 (seed 2026); D1S2 0.748 → L1S2 0.774 → D3S2 0.814 (seed 2027).
+
+Descriptive only (not pre-registered): averaging D3 and D3S2 predictions gives gold 0.820 (Δ vs D3 −0.001 [−0.008, +0.007]) and weak 0.826 (+0.003); adding D4 gives gold 0.821, weak 0.828. Seed averaging is not a lever on this gold set.
+
+**D3 (v4 cache, public-mean-v1 soft labels, last four DINOv2 blocks trained) is the base recipe** for later arms. Open next steps: pin and wire ConvNeXt-T / CoAtNet-0 weights for C1/C2 on this base; the three-outer-fold CV row; a Kaggle inference path for the competition test set.
