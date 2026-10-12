@@ -53,7 +53,7 @@ def _sha(data: bytes) -> str:
 
 
 def train_uids(folds_path: Path, labels: bytes, outer_fold: str) -> list[str]:
-    """Image-trainable studies outside the outer holdout fold with at least one observed target."""
+    """Image-trainable studies outside the outer holdout fold with at least one observed target ("none" holds out nothing)."""
     folds = load_folds(folds_path)
     observed = {row["StudyInstanceUID"] for row in map(json.loads, labels.decode().splitlines())
                 if row.get("source") != "gold" and any(row["y_mask"].values())}

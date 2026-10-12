@@ -212,7 +212,10 @@ def assert_split_disjoint(
 
 
 def pilot_splits(folds: list[dict[str, str]], outer_fold: str = "0") -> tuple[list[str], list[str], list[str]]:
-    """Train on image-training UIDs outside the outer fold, which is the weak holdout. Gold eval stays out."""
+    """Train on image-training UIDs outside the outer fold, which is the weak holdout. Gold eval stays out.
+
+    outer_fold "none" matches no fold: every image-training study trains and the weak split is empty.
+    """
     trainable = image_training_uids(folds)
     by_uid = {row["StudyInstanceUID"]: row for row in folds}
     train = [uid for uid in trainable if str(by_uid[uid].get("fold")) != outer_fold]

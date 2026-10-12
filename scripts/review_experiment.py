@@ -128,7 +128,9 @@ def verify(exp: str, folder: Path) -> tuple[dict, dict | None]:
 
 
 def score(preds: dict, labels: dict, uids: list[str]) -> tuple[float | None, dict, np.ndarray, np.ndarray]:
-    y = np.stack([labels[u][0] for u in uids])
+    if not uids:  # an all-folds arm (outer_fold "none") has no weak holdout
+        empty = np.zeros((0, len(TARGET_COLUMNS)))
+        return None, {}, empty, empty
     p = np.stack([preds[u][1] for u in uids])
     value, detail = macro(y, p)
     return value, detail, y, p

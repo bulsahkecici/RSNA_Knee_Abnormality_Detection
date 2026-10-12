@@ -38,3 +38,12 @@ def test_fold_zero_holdout_with_outer_fold_one_training_set_is_rejected():
     _, weak_fold0, gold = pilot_splits(folds, "0")
     with pytest.raises(LeakageError):
         assert_split_disjoint(train_fold1, weak_fold0, gold, folds)
+
+
+def test_outer_fold_none_trains_on_every_fold_and_keeps_gold_out():
+    folds = _folds()
+    train, weak, gold = pilot_splits(folds, "none")
+    assert weak == []
+    assert set(train) == {r["StudyInstanceUID"] for r in folds if r["gold_split"] == "weak"}
+    assert not set(gold) & set(train)
+    assert_split_disjoint(train, weak, gold, folds)
