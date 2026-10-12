@@ -424,3 +424,18 @@ Both folds 1 and 2 meet the rule (gold point delta > 0, weak CI lower bound > 0)
 ConvNeXt-T is clearly worse on this recipe. CoAtNet-0 is statistically indistinguishable from D3 but slower and not better.
 
 Descriptive, not pre-registered: averaging D3 and C2 leaves gold unchanged (−0.000) with weak +0.003 [−0.002, +0.009]; D3 + D3S2 + C2 gives gold +0.001, weak +0.005 [+0.001, +0.010]. Averaging the three fold models D3, D3F1, D3F2 (none saw gold) gives gold 0.824, +0.004 [−0.003, +0.010] vs D3 — not separable from D3 on 58 gold studies; weak cannot score fold ensembles (each model trained on the others' weak folds). No ensemble meets a promotion bar; any future submission of one should be a pre-registered decision, not a choice made from these numbers.
+
+### 2026-10-12 — Prepared D3ALL / D3E12; ensemble rule fixed in advance; Lateral Meniscus check
+
+**D3ALL** (outer_fold `none`: all 4160 non-gold studies with an observed target, +25 % over D3's 3341; no weak split) and **D3E12** (D3 with 12 epochs) — configs `P3-D3ALL-*`, `P3-D3E12-*`, notebooks at `8040f46`, rehearsed `ok`. Rules fixed in the configs before running: D3ALL is the next submission candidate if its paired gold_all delta vs D3 is ≥ −0.01 (non-inferiority; gold only); D3E12 is supported if the gold_all delta vs D3 is positive and the weak ci95 lower bound is > 0. (`4b559f1` repairs a review regression introduced and caught in the same session; past reviews re-checked unchanged.)
+
+**Ensemble rule (fixed now, before D3ALL / D3E12 exist).** The next submission is a single model: D3ALL if it passes, otherwise D3E12 if supported, otherwise no new submission. A probability average of several models is submitted instead only if, on gold_all, it beats that single candidate with a paired ci95 lower bound > 0. The averages measured so far do not come close (fold models +0.004 [−0.003, +0.010], D3+D3S2+C2 +0.001 vs D3), and the submission kernel builder currently packages one checkpoint.
+
+**Lateral Meniscus (descriptive; gold not used to choose anything).** On the 4225 non-gold studies with both label sources, our hard labels and public-mean-v1 agree closely for LM: mean soft value 0.82 where ours is positive, 0.05 where ours is negative; only 8 of 3025 our-negatives have soft ≥ 0.5, while 91 of 680 our-positives (13 %) have soft < 0.5, and 520 studies we mask get soft supervision (mean 0.21). Medial Meniscus behaves the same way (0.86 / 0.09). Gold has 23 LM positives.
+
+| LM AUC | D1 | L1 | D3 | D1S2 | L1S2 | D3S2 | L1F1 | D3F1 | L1F2 | D3F2 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| gold | 0.820 | 0.781 | 0.794 | 0.840 | 0.790 | 0.826 | 0.798 | 0.783 | 0.795 | 0.812 |
+| weak (our labels) | 0.722 | 0.721 | 0.747 | 0.720 | 0.721 | 0.751 | 0.675 | 0.705 | 0.685 | 0.731 |
+
+Switching to soft labels costs LM 0.04–0.05 on gold but nothing on weak (scored against our own labels), and D3 recovers about half of the gold loss while raising weak LM. LM is the hardest finding on weak in every arm (~0.70–0.75). The two label sources barely disagree on LM, so this looks like an image-difficulty problem rather than a label-source choice; no label change is proposed. Re-picking per-target label sources by gold AUC remains off the table.
