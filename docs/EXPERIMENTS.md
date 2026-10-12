@@ -348,3 +348,20 @@ D1S2 and L1S2 (D1 and L1 at seed 2027, otherwise identical; notebook `589d8b1`, 
 **Action taken (rule fixed before the seed-2027 runs):** D3, D4, D5, C1 and C2 now use control L1 and public-mean-v1 soft labels; coverage stays v4 with 6 train centers, because no D0–D2 coverage arm won and L1 is the best measured recipe on that cache. Each arm's declared change set is unchanged and passes `validate_arm`. Suggested order: D3, D5, C1, C2, then D4 (its memory/time pilot is still open; ViT-S peaked at 0.45 GB on A100 so far).
 
 Notebooks D3, D5 and D4 generated at `62a7f8d` (control L1, v4 cache, public-mean-v1) and rehearsed `ok`. C1 and C2 cannot be generated yet: their timm weight allowlists are empty and the notebook only downloads and pins the official DINOv2 file; the generator now refuses other encoders instead of silently fetching DINOv2.
+
+### 2026-10-12 — D3 and D5 on the L1 base
+
+Both ran from notebook `62a7f8d` (control L1: v4 cache, public-mean-v1 soft labels, seed 2026, Colab A100) and passed `scripts/review_experiment.py`. The folder handed over as D4 contained the L1S2 archive (identical sha256); D4 is not reviewed yet.
+
+| Arm | gold all | gold A | gold B | weak (837) | wall |
+|---|---:|---:|---:|---:|---:|
+| L1 (2 blocks, mean) | 0.783 | 0.816 | 0.733 | 0.796 | 62 min |
+| D3 (4 blocks) | **0.820** | 0.854 | 0.784 | 0.823 | 66 min |
+| D5 (label attention) | 0.790 | 0.821 | 0.739 | 0.802 | 64 min |
+
+| Arm vs L1 | gold all Δ [95% CI] | weak Δ [95% CI] | Verdict |
+|---|---|---|---|
+| D3 | **+0.038 [+0.020, +0.059]** | +0.027 [+0.020, +0.035] | supported: gold CI > 0 and weak agrees in sign |
+| D5 | +0.007 [−0.007, +0.022] | +0.006 [+0.000, +0.011] | not supported: gold CI includes 0 |
+
+D3 is the best arm so far and the first above our hard labels' own gold agreement (0.804); gold A and gold B both rise (+0.038, +0.052), so the gain is not confined to the subset reused for selection. Largest per-class gains: Fracture +0.13, Contusion +0.06, Baker's +0.06, ACL +0.06, MCL +0.06, Medial OA +0.06; Lateral OA (−0.02) and Synovitis (−0.02) dip. Peak memory 0.74 GB, 7% slower than L1. Single seed. Trainable depth is now the strongest lever measured; D4 (all blocks, layer decay 0.75, control L1 as pre-registered) is the direct follow-up and will also be reported descriptively against D3.
