@@ -5,8 +5,8 @@ timm_name: coatnet_0_rw_224
 pretrained_tag: sw_in1k
 weights_file: coatnet_0_rw_224.sw_in1k/model.safetensors
 weights_source: local file only; training never downloads
-# Add the sha256 here only after downloading and hashing the file locally.
-weights_sha256_allowlist: []
+# Hashed locally 2026-10-12 from huggingface.co/timm/coatnet_0_rw_224.sw_in1k (model.safetensors, Apache-2.0).
+weights_sha256_allowlist: [efe01c8c139a4b0c360f508d10ae1217f7e3f3431fd85824438ed1110773366c]
 embed_dim: 768
 input_normalization: {input_range: 0-1, mean: [0.5, 0.5, 0.5], std: [0.5, 0.5, 0.5]}
 img_size_multiple: 32

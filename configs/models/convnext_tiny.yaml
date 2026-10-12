@@ -5,8 +5,8 @@ timm_name: convnext_tiny
 pretrained_tag: fb_in1k
 weights_file: convnext_tiny.fb_in1k/model.safetensors
 weights_source: local file only; training never downloads
-# Add the sha256 here only after downloading and hashing the file locally.
-weights_sha256_allowlist: []
+# Hashed locally 2026-10-12 from huggingface.co/timm/convnext_tiny.fb_in1k (model.safetensors, Apache-2.0).
+weights_sha256_allowlist: [08b9dc9c3a3a29421de7996761e176501896d1ae7fc3085cf56a643772329276]
 embed_dim: 768
 input_normalization: {input_range: 0-1, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
 img_size_multiple: 32

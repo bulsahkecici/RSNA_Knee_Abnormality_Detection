@@ -3,7 +3,7 @@
 Replaces hand-built notebooks with stacked base64 patches. Everything the run
 needs is pinned by hash: the committed ``src/rsna_knee`` archive (git ref), the
 numeric label table, the fold manifest, the Kaggle cache output (manifest
-sha256) and the official DINOv2 weights (allowlisted sha256). The ``train:``
+sha256) and the encoder's pretrained weights (allowlisted sha256). The ``train:``
 mapping of the experiment YAML is passed to the worker unchanged, so new
 training options need no generator change.
 
@@ -36,7 +36,15 @@ from rsna_knee.data.folds import image_training_uids, load_folds  # noqa: E402
 from rsna_knee.training.experiments import job_train_spec, load_arms, validate_arm  # noqa: E402
 
 LABELS = ROOT / "state/campaigns/campaign-20261003-v2/numeric-training.jsonl"
-WEIGHTS_URL = "https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_pretrain.pth"
+# Pretrained weights per encoder: (download URL, file name on Drive). The sha256 comes from the allowlist.
+WEIGHTS = {
+    "dinov2_vits14": ("https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_pretrain.pth",
+                      "dinov2_vits14_pretrain.pth"),
+    "convnext_tiny": ("https://huggingface.co/timm/convnext_tiny.fb_in1k/resolve/main/model.safetensors",
+                      "convnext_tiny.fb_in1k.safetensors"),
+    "coatnet_0_rw_224": ("https://huggingface.co/timm/coatnet_0_rw_224.sw_in1k/resolve/main/model.safetensors",
+                         "coatnet_0_rw_224.sw_in1k.safetensors"),
+}
 OUT_DIR = ROOT / "notebooks/generated"
 
 
@@ -199,7 +207,12 @@ sys.path.insert(0, str(SOURCE / 'src'))
 # rsna_knee finds the repository root (configs/, weight allowlist) from the working directory.
 os.chdir(SOURCE)
 os.environ['RSNA_DINOV2_ALLOWLIST'] = str(SOURCE / 'configs/dinov2_vits14_allowlist.json')
-assert EXPERIMENT['weights_sha256'] in json.loads((SOURCE / 'configs/dinov2_vits14_allowlist.json').read_text())['sha256']
+if EXPERIMENT['train']['encoder'] == 'dinov2_vits14':
+    assert EXPERIMENT['weights_sha256'] in json.loads((SOURCE / 'configs/dinov2_vits14_allowlist.json').read_text())['sha256']
+else:  # timm families: configs/models/<encoder>.yaml, read again by the worker's weight check
+    import yaml
+    family = yaml.safe_load((SOURCE / 'configs/models' / (EXPERIMENT['train']['encoder'] + '.yaml')).read_text())
+    assert EXPERIMENT['weights_sha256'] in family['weights_sha256_allowlist']
 LABELS = WORK / 'labels.jsonl'; LABELS.write_bytes(unpack(LABELS_B64, EXPERIMENT['labels_gz_sha256'], gz=True))
 FOLDS = WORK / 'folds.csv'; FOLDS.write_bytes(unpack(FOLDS_B64, EXPERIMENT['folds_sha256']))
 SOFT = None
@@ -230,10 +243,10 @@ t0 = time.time()
 ready, reason = manifest_ready(manifest_path)  # re-hashes every shard, checks masks and shapes
 assert ready, reason
 print(f'Cache verified in {time.time() - t0:.0f}s:', reason, flush=True)
-weights = WORK / 'dinov2_vits14_pretrain.pth'
+weights = WORK / EXPERIMENT['weights_file']
 if not weights.is_file() or sha256_file(weights) != EXPERIMENT['weights_sha256']:
     urllib.request.urlretrieve(EXPERIMENT['weights_url'], weights)
-assert sha256_file(weights) == EXPERIMENT['weights_sha256'], 'official weights hash mismatch'
+assert sha256_file(weights) == EXPERIMENT['weights_sha256'], 'pinned weights hash mismatch'
 (WORK / 'handshake.json').write_text(json.dumps(handshake(), indent=2))
 resources = {'config': str(SOURCE / 'configs/default.yaml') if (SOURCE / 'configs/default.yaml').is_file() else None,
              'folds': str(FOLDS), 'labels': str(LABELS), 'cache': str(manifest_path), 'weights': str(weights)}
@@ -292,10 +305,17 @@ def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha2
     archive, names = source_archive(ref, extra=("configs", "pyproject.toml"))
     if "configs/dinov2_vits14_allowlist.json" not in names:
         raise SystemExit("source archive lacks the DINOv2 weight allowlist")
-    if train.get("encoder") != "dinov2_vits14":  # the notebook downloads and pins only the official DINOv2 file
-        raise SystemExit(f"encoder {train.get('encoder')!r}: only dinov2_vits14 weights are wired into the notebook")
+    if train.get("encoder") not in WEIGHTS:
+        raise SystemExit(f"encoder {train.get('encoder')!r} has no pinned pretrained weights for the notebook")
+    weights_url, weights_file = WEIGHTS[train["encoder"]]
     uids = train_uids(folds_path, labels, outer_fold)
-    weights_sha = json.loads((ROOT / "configs/dinov2_vits14_allowlist.json").read_text())["sha256"][0]
+    if train["encoder"] == "dinov2_vits14":
+        weights_sha = json.loads((ROOT / "configs/dinov2_vits14_allowlist.json").read_text())["sha256"][0]
+    else:
+        allowlist = yaml.safe_load((ROOT / "configs/models" / f"{train['encoder']}.yaml").read_text())
+        if not allowlist.get("weights_sha256_allowlist"):
+            raise SystemExit(f"{train['encoder']}: hash the weights locally and add them to its allowlist first")
+        weights_sha = allowlist["weights_sha256_allowlist"][0]
     experiment = {
         "id": exp_id, "hypothesis": spec.get("hypothesis"), "config_file": str(config_path.relative_to(ROOT)),
         "config_sha256": _sha(config_path.read_bytes()), "train": train, "outer_fold": outer_fold,
@@ -304,7 +324,7 @@ def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha2
         "labels_sha256": _sha(labels), "labels_gz_sha256": _sha(labels_gz),
         "folds_file": str(folds_path.relative_to(ROOT)), "folds_sha256": _sha(folds),
         "source_sha256": _sha(archive), "n_source_files": len(names), **git_identity(ref),
-        "weights_url": WEIGHTS_URL, "weights_sha256": weights_sha, "submission": False,
+        "weights_url": weights_url, "weights_file": weights_file, "weights_sha256": weights_sha, "submission": False,
         "soft_labels_sha256": _sha(soft) if soft else None,
     }
     header = (f"# RSNA {exp_id}\n\n**Hypothesis:** {spec.get('hypothesis', '')}\n\n"
