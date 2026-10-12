@@ -186,6 +186,9 @@ def review(exp: str) -> dict:
             keep = [i for i, u in enumerate(uids) if u in old]  # arms on different caches cover different weak studies
             if name != "weak_hard_labels" and len(keep) != len(uids):
                 raise ValueError(f"control {control} lacks predictions for {name}")
+            if not keep:  # a control on another outer fold holds out different weak studies
+                report["vs_control"][name] = {"delta": None, "ci95": None, "n_boot": 0, "n_paired": 0}
+                continue
             p_new = np.stack([preds[uids[i]][1] for i in keep])
             p_old = np.stack([old[uids[i]][1] for i in keep])
             report["vs_control"][name] = paired_delta(y[keep], p_new, p_old) | {"n_paired": len(keep)}
