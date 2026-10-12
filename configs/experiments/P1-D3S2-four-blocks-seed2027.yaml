@@ -1,0 +1,49 @@
+# D3S2: D3 at seed 2027 against the existing L1S2 run, pre-registered 2026-10-12 before running. Prepared, not run.
+experiment_id: D3S2
+phase: P1
+priority: 2
+status: prepared
+queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
+hypothesis: D3's gold gain from four trainable DINO blocks replicates at a second seed
+question: >
+  D3 (seed 2026) beat L1 on gold_all by +0.038 [+0.020, +0.059]. With seed 2027 and everything else
+  identical to D3, does it beat L1S2 (L1 at seed 2027, already run)? Decides whether D3 becomes the base.
+control: L1S2
+changes: [train.unfreeze_blocks]
+folds: state/folds-v2-allgold.csv
+labels: {source: public_mean_v1, file: state/soft-labels/public-mean-v1.jsonl,
+         sha256: 7d045805be5a8643dc6e1397ad8f71e7875003799a27fd11a05a6d5a9d916e04}
+cache:
+  name: v4-dense-three-series
+  storage: npz
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid]
+  centers: 12
+  img_size: 224
+  preprocess_hash: from_manifest
+weights: {encoder: dinov2_vits14, file: dinov2_vits14_pretrain.pth, sha256: configs/dinov2_vits14_allowlist.json}
+train:
+  profile: campaign
+  encoder: dinov2_vits14
+  init: official_pretrained
+  label_source: public_mean_v1
+  pooling: mean
+  unfreeze_blocks: 4
+  unfreeze_after_epochs: 1
+  layer_decay: null
+  train_centers_per_slot: 6
+  img_size: 224
+  epochs: 8
+  effective_batch: 8
+  microbatch: 1
+  seed: 2027
+  lr_head: 0.0001
+  lr_backbone: 0.00001
+evaluation: {windows: all_centers, tta: null, splits: [gold, weak], targets: fixed hard masked labels}
+measure: [gold_macro_auc, weak_macro_auc, per_class_auc, epoch_wall_seconds, seconds_per_train_study,
+          peak_cuda_memory_bytes, evaluation_seconds, skipped_updates]
+max_full_runs: 1
+decision_criterion: >
+  Fixed before the run. Replicated if the paired gold_all bootstrap delta vs L1S2 has ci95 lower
+  bound > 0 and the weak delta is positive: D3 then becomes the base recipe. If the point delta is
+  > 0 but the interval includes 0, report a partial replication and keep L1 as the base pending a
+  third seed. If it is <= 0, D3's first result is treated as seed noise.

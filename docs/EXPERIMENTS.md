@@ -365,3 +365,14 @@ Both ran from notebook `62a7f8d` (control L1: v4 cache, public-mean-v1 soft labe
 | D5 | +0.007 [−0.007, +0.022] | +0.006 [+0.000, +0.011] | not supported: gold CI includes 0 |
 
 D3 is the best arm so far and the first above our hard labels' own gold agreement (0.804); gold A and gold B both rise (+0.038, +0.052), so the gain is not confined to the subset reused for selection. Largest per-class gains: Fracture +0.13, Contusion +0.06, Baker's +0.06, ACL +0.06, MCL +0.06, Medial OA +0.06; Lateral OA (−0.02) and Synovitis (−0.02) dip. Peak memory 0.74 GB, 7% slower than L1. Single seed. Trainable depth is now the strongest lever measured; D4 (all blocks, layer decay 0.75, control L1 as pre-registered) is the direct follow-up and will also be reported descriptively against D3.
+
+### 2026-10-12 — D4 (full DINO adaptation) on the L1 base
+
+Notebook `62a7f8d`, Colab **A100 40 GB** (others ran on 80 GB), passed review. Gold all 0.817, gold A 0.837, gold B 0.801, weak 0.824; 84 min wall, peak 1.88 GB.
+
+| Comparison | gold all Δ [95% CI] | weak Δ [95% CI] |
+|---|---|---|
+| D4 − L1 (pre-registered) | +0.035 [+0.014, +0.059] | +0.028 [+0.019, +0.037] |
+| D4 − D3 (descriptive, not pre-registered) | −0.003 [−0.018, +0.010] | +0.000 [−0.004, +0.005] |
+
+Supported against L1, but indistinguishable from D3 while costing ~1.3× wall time and 2.5× memory; per-class differences vs D3 are all within ±0.02. **D3 (last four blocks) is the working recipe.** Before it becomes the base, D3S2 repeats D3 at seed 2027 against the existing L1S2 run (one extra run instead of two); its rule is fixed in `configs/experiments/P1-D3S2-four-blocks-seed2027.yaml`.
