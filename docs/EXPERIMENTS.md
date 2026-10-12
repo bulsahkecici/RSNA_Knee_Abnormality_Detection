@@ -399,3 +399,28 @@ Descriptive only (not pre-registered): averaging D3 and D3S2 predictions gives g
 **Cross-validation.** Outer fold is now a config section (absent = 0); the worker holds `train.outer_fold` out as the weak split (before this, any outer fold other than 0 would have stopped with `train_weak_overlap`). Arms L1F1/D3F1 (outer fold 1, 3326 train studies) and L1F2/D3F2 (outer fold 2, 3324) repeat the L1→D3 comparison. The rule, fixed before any run (in the D3F1/D3F2 configs): D3 is consistent across folds if D3Fk − L1Fk has a positive gold_all delta and a weak ci95 lower bound > 0 in **both** folds 1 and 2. Gold is the same 58 studies in every fold, scored after training on a different study set. Notebooks rehearsed `ok`.
 
 **Submission.** `scripts/make_submission_kernel.py` builds an internet-off kernel that preprocesses test DICOMs with the cache kernel's exact embedded source (policy hash must equal training's `acdd5baa…` once pixel-library versions are set to training's), predicts with the notebook's exact training source, and, outside the competition rerun, first requires the 58 gold studies re-preprocessed from DICOM to reproduce the reviewed Colab probabilities. Private dataset `bulsahkecici/rsna-d3-submit-20261012-asset` and kernel `bulsahkecici/rsna-d3-submit-20261012` v1 (D3 checkpoint `803f0e70…`) were pushed; the user authorized this submission on 2026-10-12. No receipt or score yet.
+
+### 2026-10-12 — First D3 submission: public 0.835; CV confirms D3; C1/C2 do not beat D3
+
+**Kaggle submission 57114448: public score 0.835** (previous best 0.767, receipt 57003846). Submitted by the user from the Kaggle UI on kernel `bulsahkecici/rsna-d3-submit-20261012` v1 (D3 checkpoint `803f0e70…`); the API row has no kernel reference, so that link is the user's statement. In the kernel's validation run the 58 gold studies, re-preprocessed from DICOM on Kaggle, reproduced the reviewed Colab probabilities (max |Δ| 0.0014, mean 0.00013); numpy/Pillow/pydicom matched the training cache exactly; 3/3 visible test studies decoded strictly, 5.8 s/study end to end. Record: `artifacts/kaggle/rsna-d3-submit-20261012/submission-record.json`. The one-time authorization is used; `state/submission-policy.json` is back to `allow_submission: false`.
+
+**Cross-validation (rule fixed before the runs): consistent.** All six Colab archives passed review (notebook `f2d9cfc`).
+
+| Outer fold | L1 gold | D3 gold | D3 − L1 gold [95% CI] | D3 − L1 weak [95% CI] (n) |
+|---|---:|---:|---|---|
+| 0 (2026-10-12) | 0.783 | 0.820 | +0.038 [+0.020, +0.059] | +0.027 [+0.020, +0.035] (837) |
+| 1 | 0.785 | 0.828 | +0.043 [+0.026, +0.065] | +0.031 [+0.024, +0.038] (846) |
+| 2 | 0.781 | 0.825 | +0.044 [+0.025, +0.067] | +0.031 [+0.024, +0.038] (849) |
+
+Both folds 1 and 2 meet the rule (gold point delta > 0, weak CI lower bound > 0). With seed 2027 (+0.040) the D3 gain over L1 now holds in four independent comparisons. Gold A and gold B rise in every fold.
+
+**C1 / C2 (control D3, seed 2026, fold 0): not supported.**
+
+| Arm | gold all | Δ vs D3 [95% CI] | weak Δ vs D3 | wall (A100 40 GB) |
+|---|---:|---|---|---:|
+| C1 ConvNeXt-T, 6/18 blocks | 0.740 | −0.080 [−0.110, −0.050] | −0.045 [−0.058, −0.031] | 75 min |
+| C2 CoAtNet-0, 2/4 stages | 0.818 | −0.003 [−0.024, +0.019] | −0.003 [−0.012, +0.007] | 88 min |
+
+ConvNeXt-T is clearly worse on this recipe. CoAtNet-0 is statistically indistinguishable from D3 but slower and not better.
+
+Descriptive, not pre-registered: averaging D3 and C2 leaves gold unchanged (−0.000) with weak +0.003 [−0.002, +0.009]; D3 + D3S2 + C2 gives gold +0.001, weak +0.005 [+0.001, +0.010]. Averaging the three fold models D3, D3F1, D3F2 (none saw gold) gives gold 0.824, +0.004 [−0.003, +0.010] vs D3 — not separable from D3 on 58 gold studies; weak cannot score fold ensembles (each model trained on the others' weak folds). No ensemble meets a promotion bar; any future submission of one should be a pre-registered decision, not a choice made from these numbers.
