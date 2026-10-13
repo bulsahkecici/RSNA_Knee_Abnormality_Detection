@@ -17,10 +17,11 @@ from rsna_knee.models.study import POOLING_VERSIONS
 from rsna_knee.paths import CONFIG_DIR
 
 QUEUE_IDS = ("D0", "D1", "D2", "D3", "D4", "D5", "C1", "C2", "L1", "D1S2", "L1S2", "D3S2",
-             "L1F1", "D3F1", "L1F2", "D3F2", "D3ALL", "D3E12", "D3ALLE12", "D3ALLE16", "D3ALLLR2", "D3LR2", "V5LR2", "V5ALLLR2")
+             "L1F1", "D3F1", "L1F2", "D3F2", "D3ALL", "D3E12", "D3ALLE12", "D3ALLE16", "D3ALLLR2", "D3LR2", "V5LR2", "V5ALLLR2",
+             "LR2F1", "LR2F2", "LR2F3", "LR2F4", "LR2I1", "LR2I2", "LR2I3", "LR2I4")
 FOLDS = "state/folds-v2-allgold.csv"
 # Whole-section identities: any difference inside counts as one change.
-SECTIONS = ("folds", "labels", "cache", "weights", "outer_fold")  # outer_fold absent = "0"
+SECTIONS = ("folds", "labels", "cache", "weights", "outer_fold", "exclude_folds")  # outer_fold absent = "0"
 TRAIN_KEYS = {
     "profile", "encoder", "init", "label_source", "pooling", "aggregator", "aggregator_layers",
     "aggregator_heads", "unfreeze_blocks", "unfreeze_after_epochs", "unfreeze_after_steps", "layer_decay",
@@ -61,6 +62,11 @@ def validate_arm(arm: dict[str, Any], arms: dict[str, dict[str, Any]]) -> list[s
         errors.append("folds_not_allgold")
     if arm.get("outer_fold") is not None and arm["outer_fold"] not in {"1", "2", "3", "4", "none"}:
         errors.append("invalid_outer_fold")  # fold 0 is the default and is never written; "none" trains on every fold
+    excluded = arm.get("exclude_folds")
+    if excluded is not None and (not isinstance(excluded, list) or not excluded
+                                 or not set(excluded) <= {"0", "1", "2", "3", "4"}
+                                 or arm.get("outer_fold", "0") in excluded):
+        errors.append("invalid_exclude_folds")  # extra folds kept out of training entirely (nested teachers)
     if set(train) - TRAIN_KEYS:
         errors.append(f"unknown_train_keys:{sorted(set(train) - TRAIN_KEYS)}")
     if train.get("init") != "official_pretrained":

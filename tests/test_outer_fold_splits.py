@@ -47,3 +47,12 @@ def test_outer_fold_none_trains_on_every_fold_and_keeps_gold_out():
     assert set(train) == {r["StudyInstanceUID"] for r in folds if r["gold_split"] == "weak"}
     assert not set(gold) & set(train)
     assert_split_disjoint(train, weak, gold, folds)
+
+
+def test_exclude_folds_is_validated():
+    from rsna_knee.training.experiments import load_arms, validate_arm
+    arms = load_arms()
+    arm = dict(arms["LR2I1"])
+    assert validate_arm(arm, arms) == []
+    assert "invalid_exclude_folds" in validate_arm(dict(arm, exclude_folds=["1"]), arms)  # cannot exclude the holdout
+    assert "invalid_exclude_folds" in validate_arm(dict(arm, exclude_folds=[]), arms)

@@ -490,3 +490,22 @@ Following `docs/research/PUBLIC_UPDATE_20261013.md` (our 0.71 mm/px and 3 fluid 
 | V5ALLLR2 | v5 | none | D3ALLLR2 | replaces D3ALLLR2 as submission candidate only if V5LR2 passes and gold Δ > 0 with ci95 lower > −0.01 |
 
 All three use public-mean-v1 soft labels, four trainable blocks and lr_backbone 2e-5. The v5 cache (2 parts, ~31 GiB) has no Drive copy yet; Drive partials are now per-runtime, so parallel first downloads cannot corrupt each other.
+
+### 2026-10-13 — Pseudo-label and 5-fold plan, fixed before any teacher runs
+
+User-approved plan: pseudo labels (the most cited lever behind ≥ 0.95 single models, no external data) plus a 5-fold ensemble. Teacher recipe = D3LR2 (v4 cache, public-mean-v1, four trainable blocks, lr_backbone 2e-5, 8 epochs, seed 2026).
+
+| Group | Arms | Trains on | Purpose |
+|---|---|---|---|
+| Outer 5-fold teachers | D3LR2 (fold 0) + LR2F1–LR2F4 | all non-gold except fold k | OOF predictions for every non-gold study → `pseudo-v1-all`; 5-model ensemble candidate |
+| Inner teachers | LR2I1–LR2I4 | folds 1–4 except k (never fold 0) | fold-0-blind OOF for folds 1–4 → `pseudo-v1-nofold0` |
+| Students (configs written once the tables exist) | PL0 (fold 0, control D3LR2), PLALL (all folds, control D3ALLLR2) | pseudo tables | weak-scored test; submission candidate |
+
+Why inner teachers: an outer teacher that labels fold 1 was trained on fold-0 labels, so a fold-0 student taught by it would carry fold-0 information into its own weak score. Gold is unaffected either way (no model ever trains on it).
+
+Fixed now (`scripts/build_pseudo_labels.py`): pseudo target = 0.5 × public-mean-v1 + 0.5 × teacher plain probability, per finding; teachers must have passed review, hold out pairwise different folds, never label their own training studies; the fold-0-blind table must come from teachers that excluded fold 0 and contains no fold-0 rows; gold rows are impossible. Dry run on D3/D3F1/D3F2: 2608 rows, 0 gold, guards reject a fold-0-seeing teacher and duplicate folds.
+
+Rules fixed now:
+- **PL0** is supported if its weak Δ vs D3LR2 has ci95 lower bound > 0 and its gold_all Δ is positive.
+- **PLALL** replaces the current candidate (D3ALLLR2, or V5ALLLR2 if it passes) only if PL0 is supported and PLALL's gold_all Δ vs that candidate is > 0 with ci95 lower bound > −0.01.
+- **5-fold ensemble** (mean of D3LR2 + LR2F1–4, or of the student folds if a second round happens) is submitted instead of the single candidate only if it beats that candidate on gold_all with ci95 lower bound > 0 — the ensemble rule of 2026-10-12, unchanged.

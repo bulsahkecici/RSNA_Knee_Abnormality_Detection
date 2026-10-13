@@ -52,13 +52,14 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def train_uids(folds_path: Path, labels: bytes, outer_fold: str) -> list[str]:
+def train_uids(folds_path: Path, labels: bytes, outer_fold: str, exclude: tuple[str, ...] = ()) -> list[str]:
     """Image-trainable studies outside the outer holdout fold with at least one observed target ("none" holds out nothing)."""
     folds = load_folds(folds_path)
     observed = {row["StudyInstanceUID"] for row in map(json.loads, labels.decode().splitlines())
                 if row.get("source") != "gold" and any(row["y_mask"].values())}
     fold_of = {r["StudyInstanceUID"]: r["fold"] for r in folds}
-    return sorted(u for u in image_training_uids(folds) if fold_of[u] != outer_fold and u in observed)
+    return sorted(u for u in image_training_uids(folds) if fold_of[u] != outer_fold and fold_of[u] not in exclude
+                  and u in observed)
 
 
 def _code(source: str) -> dict:
@@ -318,7 +319,7 @@ def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha2
     if train.get("encoder") not in WEIGHTS:
         raise SystemExit(f"encoder {train.get('encoder')!r} has no pinned pretrained weights for the notebook")
     weights_url, weights_file = WEIGHTS[train["encoder"]]
-    uids = train_uids(folds_path, labels, outer_fold)
+    uids = train_uids(folds_path, labels, outer_fold, tuple(spec.get("exclude_folds") or ()))
     if train["encoder"] == "dinov2_vits14":
         weights_sha = json.loads((ROOT / "configs/dinov2_vits14_allowlist.json").read_text())["sha256"][0]
     else:
