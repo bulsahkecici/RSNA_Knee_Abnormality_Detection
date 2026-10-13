@@ -457,3 +457,9 @@ Pre-registered ensemble rule applied: mean(D3ALL, D3E12) vs D3ALL on gold +0.005
 Next arm, rule fixed before running: **D3ALLE12** (D3ALL with 12 epochs, control D3ALL) replaces D3ALL as the candidate if its gold delta vs D3ALL is > 0 with ci95 lower bound > −0.01.
 
 **D3ALL submission (2026-10-13): Kaggle 57133827, public 0.845** (D3 57114448: 0.835). The user pushed kernel `rsna-d3all-submit-20261013` v1 and submitted from the Kaggle UI. Validation run: 58-gold parity max |Δ| 0.0016, mean 0.00015; pixel-library versions equal training; 3/3 visible test studies decoded strictly, 4.9 s/study. The +0.010 public gain matches the +0.012 local gold gain of D3ALL over D3. Record: `artifacts/kaggle/rsna-d3all-submit-20261013/submission-record.json`.
+
+### 2026-10-13 — Three parallel candidates on the D3ALL base; joint selection rule fixed first
+
+To use three concurrent Colab GPUs, two arms join the already prepared D3ALLE12, each one variable away from D3ALL (all non-gold studies, gold-only evaluation): **D3ALLE16** (16 epochs; with D3ALL and D3ALLE12 this gives an 8/12/16 schedule curve) and **D3ALLLR2** (backbone learning rate 2e-5 instead of 1e-5 at 8 epochs; the cheap alternative answer to "four blocks are under-trained").
+
+Joint selection rule, fixed before any of the three has run (written in the D3ALLE16 and D3ALLLR2 configs; D3ALLE12's own rule is the same qualification test): a candidate qualifies if its paired gold_all delta vs D3ALL is > 0 with ci95 lower bound > −0.01; the qualifying candidate with the highest gold_all point estimate becomes the submission candidate, the shorter training winning ties within 0.002; if none qualifies, D3ALL (public 0.845) stays. Picking the best of three on 58 gold studies favours a lucky arm, so the winner's delta will be reported as optimistic. Any submission still needs the user's explicit authorization.
