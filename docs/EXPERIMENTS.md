@@ -509,3 +509,5 @@ Rules fixed now:
 - **PL0** is supported if its weak Δ vs D3LR2 has ci95 lower bound > 0 and its gold_all Δ is positive.
 - **PLALL** replaces the current candidate (D3ALLLR2, or V5ALLLR2 if it passes) only if PL0 is supported and PLALL's gold_all Δ vs that candidate is > 0 with ci95 lower bound > −0.01.
 - **5-fold ensemble** (mean of D3LR2 + LR2F1–4, or of the student folds if a second round happens) is submitted instead of the single candidate only if it beats that candidate on gold_all with ci95 lower bound > 0 — the ensemble rule of 2026-10-12, unchanged.
+
+**D3ALLLR2 submission (2026-10-13): Kaggle 57143034, public 0.862** (D3ALL 57133827: 0.845). Validation run parity 0.0 on 58 gold (Colab T4 and Kaggle GPU produced identical predictions). The +0.017 public gain matches the local gold gain (+0.016) despite the best-of-three selection; local gold has tracked public in all three submissions so far (D3 +0.068 / D3ALL +0.010 / D3ALLLR2 +0.017 public vs +0.012 / +0.016 local where comparable).

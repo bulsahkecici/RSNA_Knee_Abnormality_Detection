@@ -12,7 +12,7 @@ D3ALL,1,D3 trained on all non-gold studies is non-inferior on gold (next submiss
 D3E12,1,Four trainable blocks need 12 epochs instead of 8,rule fixed before run,1,done_supported,"2026-10-13 gold 0.839 (vs D3 +0.019 [0.005,0.035]); weak +0.016 [0.010,0.022]"
 D3ALLE12,1,12 epochs also help when training on all non-gold studies,D3ALL and D3E12 results; rule fixed before run,1,done_qualified,"2026-10-13 gold 0.847 (vs D3ALL +0.015 [-0.000,0.031])"
 D3ALLE16,1,Four trainable blocks keep improving beyond 12 epochs,joint rule fixed before run,1,done_qualified,"2026-10-13 gold 0.849 (vs D3ALL +0.017 [-0.003,0.038]); LM -0.077, Effusion -0.042"
-D3ALLLR2,1,Backbone lr 2e-5 reaches the longer-schedule gain in 8 epochs,joint rule fixed before run,1,done_selected_candidate,"2026-10-13 gold 0.848 (vs D3ALL +0.016 [-0.001,0.034]); joint rule winner (tie with E16, shorter); kernel rsna-d3alllr2-submit-20261013"
+D3ALLLR2,1,Backbone lr 2e-5 reaches the longer-schedule gain in 8 epochs,joint rule fixed before run,1,submitted,gold 0.848 (vs D3ALL +0.016); Kaggle 57143034 public 0.862 (D3ALL 0.845)
 D3LR2,1,Backbone lr 2e-5 helps on fold 0 (weak-scored),rule fixed before run,1,notebook_ready,control D3; fold-0 control for V5LR2 (494d130)
 V5LR2,1,"v5 (0.60 mm/px, 5 slots) improves the LR2 recipe",rule fixed before run,1,notebook_ready,control D3LR2; weak-first rule (494d130)
 V5ALLLR2,1,v5 gain carries over to all-folds training,V5LR2 passes,1,notebook_ready,control D3ALLLR2; submission candidate only if V5LR2 passes (494d130)
