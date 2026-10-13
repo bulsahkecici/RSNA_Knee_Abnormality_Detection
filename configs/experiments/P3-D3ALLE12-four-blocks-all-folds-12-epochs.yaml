@@ -1,0 +1,48 @@
+# D3ALLE12: D3ALL with 12 epochs (D3E12's supported schedule on all non-gold studies). Prepared, not run.
+experiment_id: D3ALLE12
+phase: P3
+priority: 2
+status: prepared
+queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
+hypothesis: The 12-epoch gain (D3E12) carries over to training on every non-gold study
+question: >
+  D3E12 beat D3 (+0.019 gold, +0.016 weak) and D3ALL beat D3 (+0.012 gold). With everything else identical to D3ALL, do 12 epochs improve gold AUC over D3ALL?
+control: D3ALL
+changes: [train.epochs]
+outer_fold: "none"
+folds: state/folds-v2-allgold.csv
+labels: {source: public_mean_v1, file: state/soft-labels/public-mean-v1.jsonl,
+         sha256: 7d045805be5a8643dc6e1397ad8f71e7875003799a27fd11a05a6d5a9d916e04}
+cache:
+  name: v4-dense-three-series
+  storage: npz
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid]
+  centers: 12
+  img_size: 224
+  preprocess_hash: from_manifest
+weights: {encoder: dinov2_vits14, file: dinov2_vits14_pretrain.pth, sha256: configs/dinov2_vits14_allowlist.json}
+train:
+  profile: campaign
+  encoder: dinov2_vits14
+  init: official_pretrained
+  label_source: public_mean_v1
+  pooling: mean
+  unfreeze_blocks: 4
+  unfreeze_after_epochs: 1
+  layer_decay: null
+  train_centers_per_slot: 6
+  img_size: 224
+  epochs: 12
+  effective_batch: 8
+  microbatch: 1
+  seed: 2026
+  lr_head: 0.0001
+  lr_backbone: 0.00001
+evaluation: {windows: all_centers, tta: null, splits: [gold, weak], targets: fixed hard masked labels}
+measure: [gold_macro_auc, weak_macro_auc, per_class_auc, epoch_wall_seconds, seconds_per_train_study,
+          peak_cuda_memory_bytes, evaluation_seconds, skipped_updates]
+max_full_runs: 1
+decision_criterion: >
+  Fixed 2026-10-13 before the run. Gold only (no weak split): D3ALLE12 replaces D3ALL as the submission
+  candidate if its paired gold_all delta vs D3ALL is > 0 with ci95 lower bound > -0.01. Otherwise D3ALL
+  stays the candidate. Any submission needs the user's explicit authorization.

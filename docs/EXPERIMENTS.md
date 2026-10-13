@@ -439,3 +439,19 @@ Descriptive, not pre-registered: averaging D3 and C2 leaves gold unchanged (−0
 | weak (our labels) | 0.722 | 0.721 | 0.747 | 0.720 | 0.721 | 0.751 | 0.675 | 0.705 | 0.685 | 0.731 |
 
 Switching to soft labels costs LM 0.04–0.05 on gold but nothing on weak (scored against our own labels), and D3 recovers about half of the gold loss while raising weak LM. LM is the hardest finding on weak in every arm (~0.70–0.75). The two label sources barely disagree on LM, so this looks like an image-difficulty problem rather than a label-source choice; no label change is proposed. Re-picking per-target label sources by gold AUC remains off the table.
+
+### 2026-10-13 — D3ALL passes, D3E12 supported; D3ALL is the pre-registered submission candidate
+
+Both archives (notebook `8040f46`, Colab A100 40 GB) passed review.
+
+| Arm | gold all | gold A | gold B | weak (837) | Δ gold vs D3 [95% CI] | Δ weak vs D3 [95% CI] | wall |
+|---|---:|---:|---:|---:|---|---|---:|
+| D3 | 0.820 | 0.854 | 0.784 | 0.823 | — | — | 66 min |
+| D3ALL (all 4160 non-gold, no weak split) | 0.832 | 0.863 | 0.798 | — | +0.012 [+0.002, +0.021] | — | 80 min |
+| D3E12 (12 epochs) | **0.839** | 0.876 | 0.804 | 0.839 | +0.019 [+0.005, +0.035] | +0.016 [+0.010, +0.022] | 98 min |
+
+D3ALL meets its non-inferiority rule (≥ −0.01) and in fact improves gold. D3E12 meets its rule (gold > 0, weak CI > 0). Per-class: both gain ACL (+0.03) and Medial Meniscus (+0.03/+0.04); D3E12 also MCL +0.05, Contusion +0.06, Baker's +0.04, Synovitis +0.03, with Lateral Meniscus −0.01.
+
+Pre-registered ensemble rule applied: mean(D3ALL, D3E12) vs D3ALL on gold +0.005 [−0.003, +0.016] — CI includes 0, so the candidate stays the single model **D3ALL** (descriptively D3E12 − D3ALL is +0.007 [−0.005, +0.021]). Submission kernel `rsna-d3all-submit-20261013` built (D3ALL checkpoint `e0851666…`, 58-row gold parity file) and its private dataset uploaded; the kernel push and any submission await the user's authorization.
+
+Next arm, rule fixed before running: **D3ALLE12** (D3ALL with 12 epochs, control D3ALL) replaces D3ALL as the candidate if its gold delta vs D3ALL is > 0 with ci95 lower bound > −0.01.
