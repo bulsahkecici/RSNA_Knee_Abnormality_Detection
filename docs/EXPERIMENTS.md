@@ -463,3 +463,18 @@ Next arm, rule fixed before running: **D3ALLE12** (D3ALL with 12 epochs, control
 To use three concurrent Colab GPUs, two arms join the already prepared D3ALLE12, each one variable away from D3ALL (all non-gold studies, gold-only evaluation): **D3ALLE16** (16 epochs; with D3ALL and D3ALLE12 this gives an 8/12/16 schedule curve) and **D3ALLLR2** (backbone learning rate 2e-5 instead of 1e-5 at 8 epochs; the cheap alternative answer to "four blocks are under-trained").
 
 Joint selection rule, fixed before any of the three has run (written in the D3ALLE16 and D3ALLLR2 configs; D3ALLE12's own rule is the same qualification test): a candidate qualifies if its paired gold_all delta vs D3ALL is > 0 with ci95 lower bound > −0.01; the qualifying candidate with the highest gold_all point estimate becomes the submission candidate, the shorter training winning ties within 0.002; if none qualifies, D3ALL (public 0.845) stays. Picking the best of three on 58 gold studies favours a lucky arm, so the winner's delta will be reported as optimistic. Any submission still needs the user's explicit authorization.
+
+### 2026-10-13 — D3ALLE12, D3ALLE16, D3ALLLR2: all qualify; D3ALLLR2 is the candidate by the joint rule
+
+All three archives passed review (gold only; GPUs differed: A100 40 GB, L4, T4).
+
+| Arm | gold all | gold A | gold B | Δ gold vs D3ALL [95% CI] | wall |
+|---|---:|---:|---:|---|---:|
+| D3ALL (8 ep, lr_bb 1e-5) | 0.832 | 0.863 | 0.798 | — | 80 min |
+| D3ALLE12 (12 ep) | 0.847 | 0.881 | 0.813 | +0.015 [−0.000, +0.031] | 119 min |
+| D3ALLE16 (16 ep) | 0.849 | 0.889 | 0.808 | +0.017 [−0.003, +0.038] | 167 min |
+| D3ALLLR2 (8 ep, lr_bb 2e-5) | 0.848 | 0.875 | 0.811 | +0.016 [−0.001, +0.034] | 96 min (T4) |
+
+Joint rule (fixed before the runs): all three qualify (Δ > 0, CI lower > −0.01). Highest gold is D3ALLE16 (0.8491); D3ALLLR2 (0.8476) is within 0.002, so the shorter training wins: **D3ALLLR2 is the submission candidate**. D3ALLE12 (0.8467) is 0.0024 behind the top. Ensemble rule: mean(E12, E16, LR2) +0.003 [−0.007, +0.012] and mean(E16, LR2) +0.003 [−0.006, +0.012] vs D3ALLLR2 — CIs include 0, so a single model. Best-of-three on 58 gold studies: the +0.016 is optimistic.
+
+Descriptive: the 8→12→16 epoch curve flattens (+0.015, +0.017), and 16 epochs lose Lateral Meniscus (−0.077) and Effusion (−0.042) while gaining MCL, Medial Meniscus, ACL — a sign of over-fitting some findings. Doubling the backbone LR gets the same overall gain in 8 epochs without large per-class losses (largest −0.010 Fracture). Submission kernel `rsna-d3alllr2-submit-20261013` (checkpoint `9008ec19…`) built and its private dataset uploaded; the kernel push and submission are the user's.
