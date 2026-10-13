@@ -1,6 +1,7 @@
 """Build a private, internet-off Kaggle submission kernel for one reviewed Colab arm.
 
 Usage: python scripts/make_submission_kernel.py D3 --slug rsna-d3-submit-20261012
+       python scripts/make_submission_kernel.py D3LR2 LR2F1 LR2F2 LR2F3 LR2F4 --slug <slug>   # equal-weight mean
 
 Writes artifacts/kaggle/<slug>-asset/upload/ (private dataset: offline-bundle.tar.gz) and
 artifacts/kaggle/<slug>/ (entry.py + kernel-metadata.json). Nothing is pushed or submitted here.
@@ -65,27 +66,37 @@ def training_source(exp: str, build: dict) -> bytes:
     return data
 
 
-def build(exp: str, slug: str, parity_file: Path | None = None) -> tuple[Path, Path]:
+def _member(exp: str, parity_dir: Path | None) -> dict:
     out = ROOT / "artifacts/colab" / f"p1-{exp}" / "output"
     review = json.loads((out / "review.json").read_text())
     ran = json.loads((out / "experiment.json").read_text())
     build_info = json.loads((ROOT / "notebooks/generated" / f"{exp}.build.json").read_text())
     metrics = json.loads((out / "job/metrics.json").read_text())
     if review["experiment"] != exp or ran["id"] != exp or ran["source_sha256"] != build_info["source_sha256"]:
-        raise SystemExit("reviewed result, run record and notebook build disagree")
+        raise SystemExit(f"{exp}: reviewed result, run record and notebook build disagree")
     checkpoint = out / "job/checkpoint.pt"
     checkpoint_sha = _sha(checkpoint.read_bytes())
     if checkpoint_sha != metrics["oof_provenance"]["checkpoint_sha256"]:
-        raise SystemExit("checkpoint does not match the evaluated checkpoint")
-    pre, policy, preprocess_hash, pixel_versions = preprocess_source(ran["cache_manifest_sha256"])
-    model = training_source(exp, build_info)
-    if parity_file is None:
+        raise SystemExit(f"{exp}: checkpoint does not match the evaluated checkpoint")
+    if parity_dir is None:
         rows = [json.loads(x) for x in (out / "job/predictions.jsonl").read_text().splitlines()]
         parity = "".join(json.dumps(r) + "\n" for r in rows if r["split"] == "gold").encode()
     else:
-        parity = parity_file.read_bytes()
+        parity = (parity_dir / f"{exp}.jsonl").read_bytes()
     if not parity.strip():
-        raise SystemExit("no parity predictions")
+        raise SystemExit(f"{exp}: no parity predictions")
+    model = training_source(exp, build_info)
+    return {"exp": exp, "checkpoint": checkpoint, "checkpoint_sha256": checkpoint_sha, "model": model,
+            "parity": parity, "cache": ran["cache_manifest_sha256"], "git_commit": ran["git_commit"],
+            "gold": review["splits"]["gold_all"]["macro_auc"]}
+
+
+def build(exps: list[str], slug: str, parity_dir: Path | None = None) -> tuple[Path, Path]:
+    """One reviewed arm, or several averaged with equal weight; all must share one training cache."""
+    members = [_member(exp, parity_dir) for exp in exps]
+    if len({m["cache"] for m in members}) != 1 or len(set(exps)) != len(exps):
+        raise SystemExit("ensemble members must be distinct and share one training cache")
+    pre, policy, preprocess_hash, pixel_versions = preprocess_source(members[0]["cache"])
 
     asset = ROOT / "artifacts/kaggle" / f"{slug}-asset"
     staged = asset / "bundle"
@@ -94,18 +105,21 @@ def build(exp: str, slug: str, parity_file: Path | None = None) -> tuple[Path, P
     (staged / "wheels").mkdir(parents=True)
     # .blob, not .tar.gz: Kaggle may unpack archives inside an uploaded dataset.
     (staged / "preprocess-source.blob").write_bytes(pre)
-    (staged / "model-source.blob").write_bytes(model)
-    shutil.copyfile(checkpoint, staged / "checkpoint.pt")
-    (staged / "parity.jsonl").write_bytes(parity)
+    for m in members:
+        (staged / f"model-source-{_sha(m['model'])[:16]}.blob").write_bytes(m["model"])
+        (staged / "members" / m["exp"]).mkdir(parents=True)
+        shutil.copyfile(m["checkpoint"], staged / "members" / m["exp"] / "checkpoint.pt")
+        (staged / "members" / m["exp"] / "parity.jsonl").write_bytes(m["parity"])
     for wheel in sorted(WHEELS.glob("*.whl")):
         shutil.copyfile(wheel, staged / "wheels" / wheel.name)
     files = {str(p.relative_to(staged)): _sha(p.read_bytes()) for p in sorted(staged.rglob("*")) if p.is_file()}
-    identity = {"experiment": exp, "checkpoint_sha256": checkpoint_sha, "training_source_sha256": _sha(model),
+    identity = {"experiment": "+".join(exps), "ensemble": "equal-weight mean of probabilities" if len(exps) > 1 else None,
+                "members": [{"experiment": m["exp"], "checkpoint_sha256": m["checkpoint_sha256"],
+                             "training_source_sha256": _sha(m["model"]), "git_commit": m["git_commit"],
+                             "gold_all_macro_auc": m["gold"]} for m in members],
                 "preprocess_source_sha256": _sha(pre), "preprocess_hash": preprocess_hash, "policy": policy,
-                "training_pixel_versions": pixel_versions,
-                "cache_manifest_sha256": ran["cache_manifest_sha256"], "img_size": int(policy["size"]),
-                "codec_pins": CODEC_PINS, "git_commit": ran["git_commit"],
-                "gold_all_macro_auc": review["splits"]["gold_all"]["macro_auc"]}
+                "training_pixel_versions": pixel_versions, "cache_manifest_sha256": members[0]["cache"],
+                "img_size": int(policy["size"]), "codec_pins": CODEC_PINS}
     (staged / "MANIFEST.json").write_text(json.dumps({"internet_required": False, "identity": identity, "files": files},
                                                      indent=2))
     upload = asset / "upload"
@@ -212,7 +226,7 @@ def atomic_json(path, value):
 
 
 def find_asset():
-    found = [p.parent for p in INPUTS.rglob("MANIFEST.json") if (p.parent / "checkpoint.pt").is_file()]
+    found = [p.parent for p in INPUTS.rglob("MANIFEST.json") if (p.parent / "preprocess-source.blob").is_file()]
     if not found:
         archives = list(INPUTS.rglob("offline-bundle.tar.gz"))
         assert len(archives) == 1, f"offline bundle missing or ambiguous: {archives}"
@@ -281,10 +295,27 @@ def preprocess(comp_csv, dicom_root, uids, dest, strict, pre_src, deps, workers,
                pre_src, deps, name)
 
 
-def predict(manifests, uids, out, model_src, deps, asset):
+def predict(manifests, uids, out, member, deps, asset):
+    """One member's predictions with that member's own training source."""
+    src = unpack(asset / f"model-source-{member['training_source_sha256'][:16]}.blob",
+                 TMP / ("model-source-" + member["training_source_sha256"][:16]))
     return run(PREDICT, {"manifests": [str(m) for m in manifests], "study_ids": uids, "out": str(out),
-                         "checkpoint": str(asset / "checkpoint.pt"), "img_size": IDENTITY["img_size"]},
-               model_src, deps, "predict-" + out.stem)
+                         "checkpoint": str(asset / "members" / member["experiment"] / "checkpoint.pt"),
+                         "img_size": IDENTITY["img_size"]}, src, deps, "predict-" + out.stem)
+
+
+def predict_all(manifests, uids, stem, deps, asset):
+    """Equal-weight mean over members; every member must predict the same studies and targets."""
+    per, targets = [], None
+    for member in IDENTITY["members"]:
+        out = TMP / f"{stem}-{member['experiment']}.jsonl"
+        info = predict(manifests, uids, out, member, deps, asset)
+        assert targets in (None, info["targets"]), "members disagree on target order"
+        targets, device = info["targets"], info["device"]
+        per.append(read_jsonl(out))
+    assert all(set(p) == set(per[0]) for p in per), "members predicted different study sets"
+    mean = {u: {t: sum(p[u][t] for p in per) / len(per) for t in targets} for u in per[0]}
+    return mean, per, targets, device
 
 
 def check_policy(built, name):
@@ -306,25 +337,30 @@ def main():
     result["packages"] = setup_packages(asset)
     deps = result["packages"]["target"]
     pre_src = unpack(asset / "preprocess-source.blob", TMP / "preprocess-source")
-    model_src = unpack(asset / "model-source.blob", TMP / "model-source")
     workers = max(1, min(4, os.cpu_count() or 1))
 
     can_check = (comp / "train_series.csv").is_file() and (comp / "train_series").is_dir()
     if not RERUN and can_check:
-        parity = read_jsonl(asset / "parity.jsonl")
+        members = IDENTITY["members"]
+        parity = {m["experiment"]: read_jsonl(asset / "members" / m["experiment"] / "parity.jsonl") for m in members}
+        uids = sorted(parity[members[0]["experiment"]])
+        assert all(sorted(p) == uids for p in parity.values()), "members have different parity studies"
         t0 = time.time()
-        built = preprocess(comp / "train_series.csv", comp / "train_series", sorted(parity), TMP / "parity-cache",
+        built = preprocess(comp / "train_series.csv", comp / "train_series", uids, TMP / "parity-cache",
                            True, pre_src, deps, workers, "preprocess-parity")
         result["pixel_versions_match_training"] = check_policy(built, "parity")
         result["pixel_runtime_versions"] = built["pixel_runtime_versions"]
         assert built["n_quarantine"] == 0, f"parity studies quarantined: {built['quarantine']}"
-        predict([TMP / "parity-cache/manifest.json"], sorted(parity), TMP / "parity-predictions.jsonl", model_src, deps, asset)
-        mine = read_jsonl(TMP / "parity-predictions.jsonl")
-        assert set(mine) == set(parity), "parity prediction set differs"
-        targets = [k for k in parity[next(iter(parity))] if k not in {"StudyInstanceUID", "split"}]
-        diffs = [abs(mine[u][t] - parity[u][t]) for u in parity for t in targets]
-        result["parity"] = {"n_studies": len(parity), "max_abs": max(diffs), "mean_abs": sum(diffs) / len(diffs),
-                            "seconds": round(time.time() - t0, 1)}
+        _, mine, targets, _ = predict_all([TMP / "parity-cache/manifest.json"], uids, "parity", deps, asset)
+        result["parity"] = {"n_studies": len(uids), "seconds": None, "members": {}}
+        for member, got in zip(members, mine, strict=True):
+            ref = parity[member["experiment"]]
+            assert set(got) == set(ref), f"{member['experiment']}: parity prediction set differs"
+            diffs = [abs(got[u][t] - ref[u][t]) for u in ref for t in targets]
+            result["parity"]["members"][member["experiment"]] = {"max_abs": max(diffs), "mean_abs": sum(diffs) / len(diffs)}
+        result["parity"]["max_abs"] = max(v["max_abs"] for v in result["parity"]["members"].values())
+        result["parity"]["mean_abs"] = max(v["mean_abs"] for v in result["parity"]["members"].values())
+        result["parity"]["seconds"] = round(time.time() - t0, 1)
         atomic_json(WORK / "offline-result.json", result)
         print("parity", json.dumps(result["parity"]), flush=True)
         assert result["parity"]["max_abs"] <= PARITY_MAX_ABS and result["parity"]["mean_abs"] <= PARITY_MEAN_ABS, \
@@ -350,10 +386,9 @@ def main():
                              pre_src, deps, workers, "preprocess-test-relaxed")
         manifests.append(TMP / "test-cache-relaxed/manifest.json")
     preprocess_seconds = time.time() - t0
-    predicted = predict(manifests, studies, TMP / "test-predictions.jsonl", model_src, deps, asset)
-    probs = read_jsonl(TMP / "test-predictions.jsonl")
+    probs, _, model_targets, device = predict_all(manifests, studies, "test", deps, asset)
     targets = columns[1:]
-    assert targets == predicted["targets"], "submission columns differ from the model's targets"
+    assert targets == model_targets, "submission columns differ from the model's targets"
     missing = [u for u in studies if u not in probs]
     assert len(missing) <= MAX_FALLBACK_FRACTION * len(studies), f"{len(missing)} test studies could not be preprocessed"
     fallback = {t: sum(p[t] for p in probs.values()) / len(probs) if probs else 0.5 for t in targets}
@@ -372,11 +407,12 @@ def main():
                   fallback_uids=missing, strict_quarantine=strict["quarantine"],
                   preprocess_seconds=round(preprocess_seconds, 1),
                   seconds_per_test_study=round((time.time() - t0) / len(studies), 3),
-                  wall_seconds=round(time.time() - started, 1), device=predicted["device"])
+                  wall_seconds=round(time.time() - started, 1), device=device, n_members=len(IDENTITY["members"]))
     atomic_json(WORK / "offline-result.json", result)
     print(json.dumps({k: result[k] for k in ("status", "n_test", "n_strict", "n_relaxed", "n_fallback",
                                              "seconds_per_test_study", "wall_seconds")}), flush=True)
-    shutil.rmtree(TMP, ignore_errors=True)
+    if os.environ.get("RSNA_KEEP_TMP") != "1":  # local rehearsal keeps per-member predictions
+        shutil.rmtree(TMP, ignore_errors=True)
 
 
 if __name__ == "__main__":
@@ -386,11 +422,11 @@ if __name__ == "__main__":
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("experiment")
+    parser.add_argument("experiments", nargs="+", help="one reviewed arm, or several to average")
     parser.add_argument("--slug", required=True)
-    parser.add_argument("--parity-file", type=Path, help="rehearsal only: replaces the reviewed gold predictions")
+    parser.add_argument("--parity-dir", type=Path, help="rehearsal only: <experiment>.jsonl files replace the reviewed gold predictions")
     args = parser.parse_args()
-    upload, kernel = build(args.experiment, args.slug, args.parity_file)
+    upload, kernel = build(args.experiments, args.slug, args.parity_dir)
     print(upload)
     print(kernel)
 
