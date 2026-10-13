@@ -478,3 +478,15 @@ All three archives passed review (gold only; GPUs differed: A100 40 GB, L4, T4).
 Joint rule (fixed before the runs): all three qualify (Δ > 0, CI lower > −0.01). Highest gold is D3ALLE16 (0.8491); D3ALLLR2 (0.8476) is within 0.002, so the shorter training wins: **D3ALLLR2 is the submission candidate**. D3ALLE12 (0.8467) is 0.0024 behind the top. Ensemble rule: mean(E12, E16, LR2) +0.003 [−0.007, +0.012] and mean(E16, LR2) +0.003 [−0.006, +0.012] vs D3ALLLR2 — CIs include 0, so a single model. Best-of-three on 58 gold studies: the +0.016 is optimistic.
 
 Descriptive: the 8→12→16 epoch curve flattens (+0.015, +0.017), and 16 epochs lose Lateral Meniscus (−0.077) and Effusion (−0.042) while gaining MCL, Medial Meniscus, ACL — a sign of over-fitting some findings. Doubling the backbone LR gets the same overall gain in 8 epochs without large per-class losses (largest −0.010 Fracture). Submission kernel `rsna-d3alllr2-submit-20261013` (checkpoint `9008ec19…`) built and its private dataset uploaded; the kernel push and submission are the user's.
+
+### 2026-10-13 — Resolution/series test on the LR2 recipe prepared
+
+Following `docs/research/PUBLIC_UPDATE_20261013.md` (our 0.71 mm/px and 3 fluid slots vs 0.36–0.49 mm/px and 5–6 series in every eligible strong recipe), three arms, notebooks at `494d130`, rehearsed `ok`:
+
+| Arm | Cache | Fold | Control | Rule (fixed before running) |
+|---|---|---|---|---|
+| D3LR2 | v4 (3 fluid, 224 px) | 0 | D3 | supported if weak Δ ci95 lower > 0 and gold Δ > 0 |
+| V5LR2 | v5 (5 slots, 154 mm → 256 px, ≈0.60 mm/px, model 252 px) | 0 | D3LR2 | supported if weak Δ ci95 lower > 0 and gold Δ > 0 (weak first, per thread 748011) |
+| V5ALLLR2 | v5 | none | D3ALLLR2 | replaces D3ALLLR2 as submission candidate only if V5LR2 passes and gold Δ > 0 with ci95 lower > −0.01 |
+
+All three use public-mean-v1 soft labels, four trainable blocks and lr_backbone 2e-5. The v5 cache (2 parts, ~31 GiB) has no Drive copy yet; Drive partials are now per-runtime, so parallel first downloads cannot corrupt each other.
