@@ -17,7 +17,7 @@ from rsna_knee.models.study import POOLING_VERSIONS
 from rsna_knee.paths import CONFIG_DIR
 
 QUEUE_IDS = ("D0", "D1", "D2", "D3", "D4", "D5", "C1", "C2", "L1", "D1S2", "L1S2", "D3S2",
-             "L1F1", "D3F1", "L1F2", "D3F2", "D3ALL", "D3E12", "D3ALLE12", "D3ALLE16", "D3ALLLR2")
+             "L1F1", "D3F1", "L1F2", "D3F2", "D3ALL", "D3E12", "D3ALLE12", "D3ALLE16", "D3ALLLR2", "D3LR2", "V5LR2", "V5ALLLR2")
 FOLDS = "state/folds-v2-allgold.csv"
 # Whole-section identities: any difference inside counts as one change.
 SECTIONS = ("folds", "labels", "cache", "weights", "outer_fold")  # outer_fold absent = "0"

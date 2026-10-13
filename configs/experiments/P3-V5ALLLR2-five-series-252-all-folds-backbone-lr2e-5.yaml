@@ -1,0 +1,52 @@
+# V5ALLLR2: D3ALLLR2 on the v5 cache, all non-gold studies. Prepared, not run.
+experiment_id: V5ALLLR2
+phase: P3
+priority: 2
+status: prepared
+queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
+hypothesis: The v5 cache gain carries over to training on every non-gold study
+question: >
+  Submission-ready twin of V5LR2: D3ALLLR2 with the v5 cache. Gold only (no weak split).
+control: D3ALLLR2
+changes: [cache, train.img_size, train.resize_from_cache]
+outer_fold: "none"
+folds: state/folds-v2-allgold.csv
+labels: {source: public_mean_v1, file: state/soft-labels/public-mean-v1.jsonl,
+         sha256: 7d045805be5a8643dc6e1397ad8f71e7875003799a27fd11a05a6d5a9d916e04}
+cache:
+  name: v5-five256-series-window
+  storage: npz
+  shards: [bulsahkecici/rsna-v5-five256-shard0-20261010, bulsahkecici/rsna-v5-five256-shard1-20261010]
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid, Sagittal:structural, Coronal:structural]
+  centers: 12
+  img_size: 256
+  crop_mm: 154
+  intensity: series
+  preprocess_hash: from_manifest
+weights: {encoder: dinov2_vits14, file: dinov2_vits14_pretrain.pth, sha256: configs/dinov2_vits14_allowlist.json}
+train:
+  profile: campaign
+  encoder: dinov2_vits14
+  init: official_pretrained
+  label_source: public_mean_v1
+  pooling: mean
+  unfreeze_blocks: 4
+  unfreeze_after_epochs: 1
+  layer_decay: null
+  train_centers_per_slot: 6
+  img_size: 252          # DINOv2 patch 14; resized on the fly from the 256 px cache
+  resize_from_cache: true
+  epochs: 8
+  effective_batch: 8
+  microbatch: 1
+  seed: 2026
+  lr_head: 0.0001
+  lr_backbone: 0.00002
+evaluation: {windows: all_centers, tta: null, splits: [gold, weak], targets: fixed hard masked labels}
+measure: [gold_macro_auc, weak_macro_auc, per_class_auc, epoch_wall_seconds, seconds_per_train_study,
+          peak_cuda_memory_bytes, evaluation_seconds, skipped_updates]
+max_full_runs: 1
+decision_criterion: >
+  Fixed 2026-10-13 before the run. Submission candidate in place of D3ALLLR2 only if V5LR2 meets its
+  rule (weak evidence from the fold-0 twin) and V5ALLLR2's gold_all delta vs D3ALLLR2 is > 0 with ci95
+  lower bound > -0.01. Any submission needs the user's explicit authorization.

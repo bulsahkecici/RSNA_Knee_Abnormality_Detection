@@ -163,13 +163,16 @@ def save_to_drive(part_dir, archive):
     if free < size * 1.05:
         print(f'  not saved to Drive: needs {size / 2**30:.1f} GiB, {free / 2**30:.1f} GiB free', flush=True)
         return
-    partial = archive.with_name(archive.name + '.partial')
+    partial = archive.with_name(f'{archive.name}.partial-{os.getpid()}-{time.time_ns()}')  # parallel runtimes never share it
     print(f'Saving {size / 2**30:.1f} GiB to Drive as {archive.name} so later runtimes skip Kaggle', flush=True)
     started = time.time()
     try:
         with tarfile.open(partial, 'w') as tar:  # .npz is already compressed
             tar.add(part_dir, arcname=part_dir.name)
-        partial.rename(archive)
+        if archive.is_file():  # another runtime finished first; both copies hold the same verified part
+            partial.unlink()
+        else:
+            partial.rename(archive)
         print(f'  saved in {(time.time() - started) / 60:.1f} min', flush=True)
     except OSError as exc:
         partial.unlink(missing_ok=True)
