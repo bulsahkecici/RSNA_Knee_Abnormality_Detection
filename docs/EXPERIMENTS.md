@@ -552,3 +552,15 @@ Our members are too similar to gain from averaging (weak +0.002 at best). A stru
 | D3LR4 vs D3LR2 (lr_backbone 4e-5) | 0.841 | +0.006 [−0.009, +0.022] | +0.004 [−0.001, +0.009] | not supported (weak CI includes 0) |
 
 Pseudo labels from teachers of the same recipe (α = 0.5) change nothing on gold or weak: the teachers agree with the public labels they were trained on and add little new information — the same family as the NTejas OOF self-distillation negative (2026-10-09 notes). The pseudo-label gains reported by ≥ 0.95 teams presumably come from stronger, more diverse teachers. lr 4e-5 trends up (+0.004 weak) but is not separable from noise; no all-folds LR4 arm is pre-registered. The candidate stays **D3ALLLR2** (public 0.862), which is also O in the reader blend rule.
+
+### 2026-10-14 — Reader scored on gold: reader alone becomes the candidate by the pre-registered rule
+
+Kernel `rsna-reader-gold-eval-20261014` ran the reader's own `infer.py` (3 fold checkpoints, mean) on the 58 gold studies from DICOM; file hashes recorded in `artifacts/kaggle/rsna-reader-gold-eval-20261014/output/reader-files.json`.
+
+| | gold all |
+|---|---:|
+| R = reader | **0.911** |
+| O = D3ALLLR2 (ours, public 0.862) | 0.848 |
+| B = per-finding rank average 0.5·R + 0.5·O | 0.895 |
+
+Rule (fixed before scoring): B − R = −0.016 [−0.033, +0.001] < −0.005, so the candidate is R; R − O = **+0.063 [+0.031, +0.096]**, CI lower bound > 0, so **R replaces O as the submission candidate**. The reader wins 10 of 12 findings; ours is better on Effusion (0.943 vs 0.878) and slightly on Synovitis (0.775 vs 0.757), so an equal-weight blend dilutes the reader. Any other weighting or per-finding routing would now be chosen on gold and is not pre-registered. Submission kernel `rsna-reader-submit-20261014` (reader_only, reader files pinned, our D3ALLLR2 still parity-checked as a pipeline health check) built; its private dataset uploaded; push and submission are the user's.
