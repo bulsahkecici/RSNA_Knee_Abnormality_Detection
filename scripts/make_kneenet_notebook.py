@@ -206,11 +206,20 @@ for split, uids in (('gold', EXPERIMENT['gold_uids']), ('weak', EXPERIMENT['weak
             for uid, prob in zip(ids, p):
                 rows.append({'StudyInstanceUID': uid, 'split': split, **{c: float(v) for c, v in zip(TARGET_COLUMNS, prob)}})
 (job / 'predictions.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows))
+# Gold again in strict fp32 (no autocast, no TF32): the offline kernel predicts in fp32, so this is its parity reference
+torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = False
+gold_fp32 = {}
+with torch.no_grad():
+    for x, mask, pos, _, _, ids in torch.utils.data.DataLoader(V5Study([u for u in EXPERIMENT['gold_uids'] if u in STUDIES], N_C, False),
+                                                                batch_size=micro, num_workers=workers):
+        p = ema(x.to(dev), mask.to(dev), pos.to(dev), res=int(T['res'])).float().sigmoid().cpu().numpy()
+        gold_fp32.update({uid: [float(v) for v in prob] for uid, prob in zip(ids, p)})
 (job / 'metrics.json').write_text(json.dumps({
     'kind': 'real', 'model': 'kneenet', 'train_uids': sorted(train_uids), 'epoch_wall_seconds': epoch_seconds,
     'skipped_updates': skipped, 'applied_updates': step, 'attempted_updates': step + skipped, 'amp_dtype': str(amp_dtype), 'micro_batch': micro,
     'oof_provenance': {'checkpoint_sha256': sha256_file(ckpt), 'encoder': 'kneenet_' + T['backbone'], 'step': step},
-    'n_gold': sum(r['split'] == 'gold' for r in rows), 'n_weak': sum(r['split'] == 'weak' for r in rows)}, indent=2))
+    'n_gold': sum(r['split'] == 'gold' for r in rows), 'n_weak': sum(r['split'] == 'weak' for r in rows),
+    'gold_fp32': gold_fp32}, indent=2))
 (WORK / 'campaign-result.json').write_text(json.dumps({'exit_reason': 'ok', 'model': 'kneenet'}))
 (WORK / 'timing.json').write_text(json.dumps({'run_job_wall_seconds': round(time.time() - started, 1),
     'gpu': torch.cuda.get_device_name(0), 'peak_cuda_bytes': torch.cuda.max_memory_allocated()}, indent=2))

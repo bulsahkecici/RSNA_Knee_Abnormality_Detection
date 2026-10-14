@@ -113,6 +113,7 @@ def rehearse(exp_id: str, scratch: Path) -> None:
     assert metrics["kind"] == "real" and sorted(metrics["train_uids"]) == sorted(train)
     assert metrics["attempted_updates"] == metrics["applied_updates"] + metrics["skipped_updates"] == resumed["step"] + metrics["skipped_updates"]
     assert {p["StudyInstanceUID"] for p in preds if p["split"] == "gold"} == set(gold)
+    assert set(metrics["gold_fp32"]) == set(gold) and all(len(v) == 12 for v in metrics["gold_fp32"].values())
     assert {p["StudyInstanceUID"] for p in preds if p["split"] == "weak"} == set(weak)
     assert json.loads((work / "campaign-result.json").read_text())["exit_reason"] == "ok"
     print(json.dumps({"experiment": exp_id, "rehearsal": "ok", "resume": "bit-identical to uninterrupted", "child": outputs[-1],
