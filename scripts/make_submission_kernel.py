@@ -30,7 +30,7 @@ COMPETITION = "rsna-knee-abnormality-detection"
 CACHE_KERNELS = {"171ef4fff32fdb62d850c0787dab55d7f4473d9cc0667a5699ec2fe9436afdf4": "rsna-v4-dense12-cache-20261009"}
 WHEELS = ROOT / "artifacts/kaggle/v3-offline-asset/wheels"
 READER = "goodpjw2008/rsna-knee-2-5d-convnext-reader"  # eligible public reader (2026-10-14 check)
-READER_MODES = ("rank50", "reader_only")
+READER_MODES = ("rank50", "reader_only", "route")  # route: listed findings from ours, the rest from the reader
 CODEC_PINS = {"pydicom": "3.0.1", "pylibjpeg": "2.1.0", "pylibjpeg-libjpeg": "2.4.0", "pylibjpeg-openjpeg": "2.6.0"}
 
 
@@ -94,7 +94,8 @@ def _member(exp: str, parity_dir: Path | None) -> dict:
 
 
 def build(exps: list[str], slug: str, parity_dir: Path | None = None, reader_eval: Path | None = None,
-          reader_mode: str | None = None, reader_weight: float = 0.5) -> tuple[Path, Path]:
+          reader_mode: str | None = None, reader_weight: float = 0.5,
+          route_ours: tuple[str, ...] = ()) -> tuple[Path, Path]:
     """One reviewed arm, or several averaged with equal weight; all must share one training cache.
 
     With reader_eval (the output folder of scripts/make_reader_eval_kernel.py) the public reader is
@@ -106,6 +107,9 @@ def build(exps: list[str], slug: str, parity_dir: Path | None = None, reader_eva
         raise SystemExit("give --reader-eval and --reader-mode together")
     if not 0 < reader_weight < 1:
         raise SystemExit("reader weight must be strictly between 0 and 1")
+    from rsna_knee.ontology import TARGET_COLUMNS
+    if (reader_mode == "route") != bool(route_ours) or set(route_ours) - set(TARGET_COLUMNS):
+        raise SystemExit("route mode needs --route-ours with valid finding names (and only route mode takes them)")
     members = [_member(exp, parity_dir) for exp in exps]
     if len({m["cache"] for m in members}) != 1 or len(set(exps)) != len(exps):
         raise SystemExit("ensemble members must be distinct and share one training cache")
@@ -131,6 +135,7 @@ def build(exps: list[str], slug: str, parity_dir: Path | None = None, reader_eva
         (staged / "reader").mkdir()
         shutil.copyfile(reader_eval / "reader-gold.csv", staged / "reader" / "parity.csv")
         reader = {"dataset": READER, "files": pinned["files"], "mode": reader_mode, "weight": reader_weight,
+                  "route_ours": sorted(route_ours),
                   "checkpoints": [f"cnxt_v0_fold{k}.pt" for k in range(3)]}
     for wheel in sorted(WHEELS.glob("*.whl")):
         shutil.copyfile(wheel, staged / "wheels" / wheel.name)
@@ -478,6 +483,9 @@ def main():
         assert sorted(rt) == sorted(targets), "reader targets differ from the submission columns"
         if IDENTITY["reader"]["mode"] == "reader_only":
             final = {uid: theirs[uid] for uid in studies}
+        elif IDENTITY["reader"]["mode"] == "route":  # per-finding AUC: each column comes whole from one model
+            ours = set(IDENTITY["reader"]["route_ours"])
+            final = {uid: {t: (final[uid][t] if t in ours else theirs[uid][t]) for t in targets} for uid in studies}
         else:  # per-finding rank average, equal weight
             w = IDENTITY["reader"]["weight"]
             mixed = {uid: {} for uid in studies}
@@ -523,9 +531,10 @@ def main() -> None:
     parser.add_argument("--reader-eval", type=Path, help="output folder of the reader gold-eval kernel")
     parser.add_argument("--reader-mode", choices=READER_MODES)
     parser.add_argument("--reader-weight", type=float, default=0.5, help="reader share in the rank50 blend")
+    parser.add_argument("--route-ours", nargs="+", default=[], help="route mode: findings taken from our model")
     args = parser.parse_args()
     upload, kernel = build(args.experiments, args.slug, args.parity_dir, args.reader_eval, args.reader_mode,
-                           args.reader_weight)
+                           args.reader_weight, tuple(args.route_ours))
     print(upload)
     print(kernel)
 
