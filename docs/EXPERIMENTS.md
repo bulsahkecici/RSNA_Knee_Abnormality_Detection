@@ -531,3 +531,14 @@ Ensemble rule applied: mean of the 5 outer teachers on gold 0.844, Δ vs D3ALLLR
 Pseudo tables (`scripts/build_pseudo_labels.py`, α = 0.5): `pseudo-v1-all` 4348 rows, folds 0–4, sha `660a4b57…`; `pseudo-v1-nofold0` 3479 rows, folds 1–4 from fold-0-blind teachers, sha `1838f379…`; no gold rows, every row has a public label. Students: **PL0** (D3LR2 + pseudo-v1-nofold0, control D3LR2) and **PLALL** (D3ALLLR2 + pseudo-v1-all, control D3ALLLR2), with the rules fixed on 2026-10-13 copied into their configs.
 
 **Ensembles of our own fold-0 models (2026-10-14, descriptive, weak-scored).** Versus D3LR2 alone: D3LR2 + D3E12 gold +0.004 [−0.002, +0.010], weak +0.0015 [−0.001, +0.004]; adding D3, D3S2 or C2 lowers both (to −0.002 weak). Our members share data, labels, backbone and cache, so their errors are correlated; the best two average for at most ~+0.002–0.004. An ensemble worth its cost needs a structurally different member (e.g. an eligible ConvNeXt reader), not more of our DINOv2 runs.
+
+### 2026-10-14 — Eligible external reader for an ensemble; blend rule fixed before scoring it
+
+Our members are too similar to gain from averaging (weak +0.002 at best). A structurally different member is needed. **Eligibility check of `goodpjw2008/rsna-knee-2-5d-convnext-reader`** (read-only; code read, nothing executed):
+- License Apache-2.0. Three fold checkpoints (`cnxt_v0_fold{0,1,2}.pt`, EMA weights), plus `train.py`, `make_labels.py`, `knee.py`, `preprocess.py`, `infer.py`.
+- Labels `v0` = mean of four public CC0 report-label tables (stevenleehans v4_blend, pilkwang v2, lixin73 sol56, laymond); all four are CC0-1.0 and derived from competition reports only.
+- Gold-58 rows get fold −1 and are never trained on; the saved checkpoint is the final EMA, not selected on gold.
+- Backbone `timm convnext_tiny`, ImageNet pretrained. Preprocessing reads competition DICOMs only. No OAI, fastMRI, OrthoFoundation or private data.
+- Verdict: **eligible under our policy** (claims are the author's; the training run itself cannot be re-verified). The author's 0.944 stack also uses OAI-trained components; only the reader is considered here. Claimed public score of the reader alone: 0.929.
+
+**Rule, fixed before any reader prediction on gold is seen.** R = reader (mean of its 3 folds, its own `infer.py`); O = our current candidate (D3ALLLR2, or PLALL if it passes its rule); B = per-finding rank average 0.5·R + 0.5·O (one fixed weight, no tuning on gold). On gold_all: the candidate is B if B ≥ R − 0.005, else R; it replaces O only if its paired gold_all delta vs O has ci95 lower bound > 0. Gold only (the reader's predictions on our weak studies are in-sample for it). Scoring kernel: `scripts/make_reader_eval_kernel.py` (runs the reader on gold-58, records the sha256 of every reader file for pinning).
