@@ -1,0 +1,51 @@
+# K5ALLS2: K5ALL with seed 2027, a member of the three-seed KneeNet ensemble E3. Prepared, not run.
+experiment_id: K5ALLS2
+phase: P4
+status: prepared
+hypothesis: A three-seed KneeNet ensemble (K5ALL, K5ALLS2, K5ALLS3) closes the gap to the 3-checkpoint public reader
+question: >
+  K5ALL is one model, the reader a mean of three checkpoints. Same data, labels, cache and schedule as K5ALL;
+  only the seed changes.
+control: K5ALL
+changes: [seed]
+outer_fold: "none"
+folds: state/folds-v2-allgold.csv
+labels: {source: public_mean4_v0, file: state/soft-labels/public-mean4-v0.jsonl,
+         sha256: 941766e7af92ae5581189115c97c28584a8273ad071b78f9cc1b1a154c926f2a}
+cache:
+  name: v5-five256-series-window
+  storage: npz
+  shards: [bulsahkecici/rsna-v5-five256-shard0-20261010, bulsahkecici/rsna-v5-five256-shard1-20261010]
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid, Sagittal:structural, Coronal:structural]
+  centers: 12
+  img_size: 256
+  crop_mm: 154
+  intensity: series
+  preprocess_hash: from_manifest
+weights: {encoder: convnext_tiny, file: convnext_tiny.in12k_ft_in1k/model.safetensors,
+          sha256: a1aefa409b513cf209b085424eb3efffe4e4a9f511491bc2c12ea35209e6bb95}
+reader_code: {dataset: goodpjw2008/rsna-knee-2-5d-convnext-reader, file: knee.py, license: Apache-2.0,
+              sha256: 314c2af387a5cbd1d25f192f19f4ecc6d4ae4b30403e92e9d9b3ed2c325880b1}
+train:
+  model: kneenet          # reader's KneeNet: ConvNeXt-T on 3-slice windows -> slot/position tokens -> 2-layer transformer -> per-finding attention
+  backbone: convnext_tiny
+  dim: 384
+  depth: 2
+  res: 256                # model input; the reader's make_views crops 0.92 of the field of view and resamples
+  k: 8                    # training windows per slot, sampled one per stratum of our 12 cached windows
+  epochs: 14
+  batch: 8                # effective; micro-batched on smaller GPUs
+  lr: 0.0001              # whole backbone
+  lr_head: 0.0005
+  wd: 0.02
+  ema: 0.998
+  clip: 3.0
+  seed: 2027
+decision_criterion: >
+  Fixed 2026-10-14 before either seed run, after K5ALL was reviewed. Let R = public reader, E3 = equal-weight mean
+  of probabilities of K5ALL, K5ALLS2 and K5ALLS3 (as the submission kernel averages members), BE = per-finding rank
+  average 0.5 R + 0.5 E3. E3 alone becomes the candidate if its gold_all delta vs R has ci95 lower bound > 0;
+  otherwise BE replaces reader-only if BE's gold_all delta vs R is > 0 with ci95 lower bound > -0.01; otherwise
+  reader-only stays. No other weights or subsets. Gold has been reused for many decisions, so a candidate that
+  passes is also checked on the public LB and enters the final selection only at public >= 0.932 (reader-only
+  0.929 + 0.003). Any submission needs the user's explicit authorization.
