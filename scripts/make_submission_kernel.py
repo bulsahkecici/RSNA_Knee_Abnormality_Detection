@@ -94,15 +94,18 @@ def _member(exp: str, parity_dir: Path | None) -> dict:
 
 
 def build(exps: list[str], slug: str, parity_dir: Path | None = None, reader_eval: Path | None = None,
-          reader_mode: str | None = None) -> tuple[Path, Path]:
+          reader_mode: str | None = None, reader_weight: float = 0.5) -> tuple[Path, Path]:
     """One reviewed arm, or several averaged with equal weight; all must share one training cache.
 
     With reader_eval (the output folder of scripts/make_reader_eval_kernel.py) the public reader is
     pinned by its recorded file hashes, parity-checked against its recorded gold predictions, and
-    combined with ours per finding: rank50 = 0.5 rank(ours) + 0.5 rank(reader); reader_only = reader.
+    combined with ours per finding: rank50 = (1 - w) rank(ours) + w rank(reader), w = reader_weight
+    (0.5 unless set); reader_only = reader.
     """
     if (reader_eval is None) != (reader_mode is None) or (reader_mode and reader_mode not in READER_MODES):
         raise SystemExit("give --reader-eval and --reader-mode together")
+    if not 0 < reader_weight < 1:
+        raise SystemExit("reader weight must be strictly between 0 and 1")
     members = [_member(exp, parity_dir) for exp in exps]
     if len({m["cache"] for m in members}) != 1 or len(set(exps)) != len(exps):
         raise SystemExit("ensemble members must be distinct and share one training cache")
@@ -127,7 +130,7 @@ def build(exps: list[str], slug: str, parity_dir: Path | None = None, reader_eva
             raise SystemExit("reader-files.json does not describe the vetted reader")
         (staged / "reader").mkdir()
         shutil.copyfile(reader_eval / "reader-gold.csv", staged / "reader" / "parity.csv")
-        reader = {"dataset": READER, "files": pinned["files"], "mode": reader_mode, "weight": 0.5,
+        reader = {"dataset": READER, "files": pinned["files"], "mode": reader_mode, "weight": reader_weight,
                   "checkpoints": [f"cnxt_v0_fold{k}.pt" for k in range(3)]}
     for wheel in sorted(WHEELS.glob("*.whl")):
         shutil.copyfile(wheel, staged / "wheels" / wheel.name)
@@ -519,8 +522,10 @@ def main() -> None:
     parser.add_argument("--parity-dir", type=Path, help="rehearsal only: <experiment>.jsonl files replace the reviewed gold predictions")
     parser.add_argument("--reader-eval", type=Path, help="output folder of the reader gold-eval kernel")
     parser.add_argument("--reader-mode", choices=READER_MODES)
+    parser.add_argument("--reader-weight", type=float, default=0.5, help="reader share in the rank50 blend")
     args = parser.parse_args()
-    upload, kernel = build(args.experiments, args.slug, args.parity_dir, args.reader_eval, args.reader_mode)
+    upload, kernel = build(args.experiments, args.slug, args.parity_dir, args.reader_eval, args.reader_mode,
+                           args.reader_weight)
     print(upload)
     print(kernel)
 
