@@ -570,3 +570,22 @@ Rule (fixed before scoring): B − R = −0.016 [−0.033, +0.001] < −0.005, s
 **Per-finding check, reader vs ours on gold (2026-10-14).** Reader significantly better on ACL (+0.12), MCL (+0.19), Medial Meniscus (+0.13) and Fracture (+0.09) — fine structural findings, exactly where our DINOv2 recipe is weak (K5 targets this). Ours is ahead only on Effusion (0.943 vs 0.878; Δ −0.065 [−0.193, +0.046], 35 positives) and our Effusion is stable across 35 reviewed runs (median 0.943, min 0.868), while the reader's is a single measurement. Rank correlation between the two models per finding 0.71–0.89. Because the Effusion pick was seen on gold, it is tested on the public LB instead of being adopted from gold: kernel `rsna-reader-effusion-ours-20261014` (route mode: Effusion from D3ALLLR2, the other 11 findings from the reader). Its gold score (≈0.916) is optimistic by construction.
 
 **Reader-only submission (2026-10-14): Kaggle 57178710, public 0.929** — the reader's own claimed score, and +0.067 over our best model (D3ALLLR2, 0.862); the gold gap was +0.063. This is the vetted public reader's predictions, not a model we trained.
+
+**K5ALL — KneeNet on our v5 cache, all non-gold studies (2026-10-14).** A100, bf16, 14 epochs uninterrupted, 7280 updates, 0 skipped (so the fp16-skip and resume-RNG issues found later in the notebook did not touch this run). Gold 0.892 (A 0.922, B 0.869); vs D3ALLLR2 **+0.045 [+0.014, +0.080]** — the first recipe of ours with a clear gold gain since D3. Against the reader it is still below: K5ALL − R = −0.018 [−0.035, −0.002]. The fixed 0.5/0.5 rank blend B5 = 0.907; B5 − R = −0.004 [−0.012, +0.004].
+
+| Finding | Reader | K5ALL | D3ALLLR2 | B5 |
+|---|---|---|---|---|
+| ACL | 0.966 | 0.978 | 0.849 | 0.975 |
+| MCL | 0.948 | 0.959 | 0.762 | 0.955 |
+| Medial Meniscus | 0.959 | 0.904 | 0.831 | 0.936 |
+| Lateral Meniscus | 0.891 | 0.867 | 0.810 | 0.896 |
+| Medial OA | 0.966 | 0.964 | 0.943 | 0.969 |
+| Lateral OA | 0.865 | 0.851 | 0.787 | 0.863 |
+| PF OA | 0.844 | 0.833 | 0.798 | 0.841 |
+| Effusion | 0.878 | 0.877 | 0.943 | 0.886 |
+| Synovitis | 0.757 | 0.688 | 0.775 | 0.726 |
+| Baker's | 0.976 | 0.976 | 0.942 | 0.980 |
+| Contusion | 0.962 | 0.918 | 0.906 | 0.945 |
+| Fracture | 0.914 | 0.890 | 0.826 | 0.908 |
+
+Rule (fixed before the run): K5ALL alone needs a CI lower bound > 0 vs R — fails; B5 needs delta > 0 with lower bound > −0.01 — fails (delta negative). Both branches fail whatever K5F0 shows, so **reader-only stays the candidate**. The KneeNet recipe closes most of the gap (ACL and MCL now match or beat the reader), but with the same architecture its Effusion (0.877) is the reader's (0.878), not D3's 0.943: the Effusion edge belongs to the DINOv2 model, which supports the route kernel rather than a KneeNet route.
