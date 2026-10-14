@@ -13,17 +13,19 @@ D3E12,1,Four trainable blocks need 12 epochs instead of 8,rule fixed before run,
 D3ALLE12,1,12 epochs also help when training on all non-gold studies,D3ALL and D3E12 results; rule fixed before run,1,done_qualified,"2026-10-13 gold 0.847 (vs D3ALL +0.015 [-0.000,0.031])"
 D3ALLE16,1,Four trainable blocks keep improving beyond 12 epochs,joint rule fixed before run,1,done_qualified,"2026-10-13 gold 0.849 (vs D3ALL +0.017 [-0.003,0.038]); LM -0.077, Effusion -0.042"
 D3ALLLR2,1,Backbone lr 2e-5 reaches the longer-schedule gain in 8 epochs,joint rule fixed before run,1,submitted,gold 0.848 (vs D3ALL +0.016); Kaggle 57143034 public 0.862 (D3ALL 0.845)
-D3LR2,1,Backbone lr 2e-5 helps on fold 0 (weak-scored),rule fixed before run,1,notebook_ready,control D3; fold-0 control for V5LR2 (494d130)
-V5LR2,1,"v5 (0.60 mm/px, 5 slots) improves the LR2 recipe",rule fixed before run,1,notebook_ready,control D3LR2; weak-first rule (494d130)
-V5ALLLR2,1,v5 gain carries over to all-folds training,V5LR2 passes,1,notebook_ready,control D3ALLLR2; submission candidate only if V5LR2 passes (494d130)
-LR2F1,1,"Outer 5-fold teacher, fold 1 (D3LR2 recipe)",pseudo-label plan fixed,1,notebook_ready,OOF for pseudo-v1-all; 5-fold ensemble member (702261e)
-LR2F2,1,"Outer 5-fold teacher, fold 2 (D3LR2 recipe)",pseudo-label plan fixed,1,notebook_ready,OOF for pseudo-v1-all; 5-fold ensemble member (702261e)
-LR2F3,1,"Outer 5-fold teacher, fold 3 (D3LR2 recipe)",pseudo-label plan fixed,1,notebook_ready,OOF for pseudo-v1-all; 5-fold ensemble member (702261e)
-LR2F4,1,"Outer 5-fold teacher, fold 4 (D3LR2 recipe)",pseudo-label plan fixed,1,notebook_ready,OOF for pseudo-v1-all; 5-fold ensemble member (702261e)
-LR2I1,2,"Fold-0-blind teacher, fold 1",pseudo-label plan fixed,1,notebook_ready,OOF for pseudo-v1-nofold0 (702261e)
-LR2I2,2,"Fold-0-blind teacher, fold 2",pseudo-label plan fixed,1,notebook_ready,OOF for pseudo-v1-nofold0 (702261e)
-LR2I3,2,"Fold-0-blind teacher, fold 3",pseudo-label plan fixed,1,notebook_ready,OOF for pseudo-v1-nofold0 (702261e)
-LR2I4,2,"Fold-0-blind teacher, fold 4",pseudo-label plan fixed,1,notebook_ready,OOF for pseudo-v1-nofold0 (702261e)
+D3LR2,1,Backbone lr 2e-5 helps on fold 0 (weak-scored),rule fixed before run,1,done_supported,"2026-10-14 gold 0.835 (vs D3 +0.015 [0.001,0.030]); weak +0.015 [0.009,0.022]; fold-0 teacher"
+V5LR2,1,"v5 (0.60 mm/px, 5 slots) improves the LR2 recipe",rule fixed before run,1,done_not_supported,"2026-10-14 gold 0.829 (vs D3LR2 -0.007); weak -0.005 [-0.011,0.001]"
+V5ALLLR2,1,v5 gain carries over to all-folds training,V5LR2 passes,1,done_not_candidate,"2026-10-14 gold 0.850 (vs D3ALLLR2 +0.002 [-0.018,0.024]); V5LR2 failed"
+LR2F1,1,"Outer 5-fold teacher, fold 1 (D3LR2 recipe)",pseudo-label plan fixed,1,done,teacher reviewed; in pseudo-v1-all (660a4b57)
+LR2F2,1,"Outer 5-fold teacher, fold 2 (D3LR2 recipe)",pseudo-label plan fixed,1,done,teacher reviewed; in pseudo-v1-all (660a4b57)
+LR2F3,1,"Outer 5-fold teacher, fold 3 (D3LR2 recipe)",pseudo-label plan fixed,1,done,teacher reviewed; in pseudo-v1-all (660a4b57)
+LR2F4,1,"Outer 5-fold teacher, fold 4 (D3LR2 recipe)",pseudo-label plan fixed,1,done,teacher reviewed; in pseudo-v1-all (660a4b57)
+LR2I1,2,"Fold-0-blind teacher, fold 1",pseudo-label plan fixed,1,done,teacher reviewed; in pseudo-v1-nofold0 (1838f379)
+LR2I2,2,"Fold-0-blind teacher, fold 2",pseudo-label plan fixed,1,done,teacher reviewed; in pseudo-v1-nofold0 (1838f379)
+LR2I3,2,"Fold-0-blind teacher, fold 3",pseudo-label plan fixed,1,done,teacher reviewed; in pseudo-v1-nofold0 (1838f379)
+LR2I4,2,"Fold-0-blind teacher, fold 4",pseudo-label plan fixed,1,done,teacher reviewed; in pseudo-v1-nofold0 (1838f379)
+PL0,1,"Pseudo labels improve D3LR2 (weak-scored, fold-0-blind teachers)",teachers reviewed,1,notebook_ready,control D3LR2; pseudo-v1-nofold0 1838f379
+PLALL,1,Pseudo labels improve the all-folds submission recipe,PL0 supported,1,notebook_ready,control D3ALLLR2; pseudo-v1-all 660a4b57
 D4,2,Full DINO adaptation improves over partial fine-tuning,Memory/time pilot and staged learning rates,1,done_supported_no_gain_over_D3,"2026-10-12 gold 0.817 (vs L1 +0.035 [0.014,0.059]); vs D3 -0.003 [-0.018,0.010] descriptive; 1.3x time 2.5x memory"
 D5,2,Finding attention helps with dense variable windows,Best coverage and matched mean baseline,1,done_not_supported,"2026-10-12 gold 0.790 (vs L1 +0.007 [-0.007,0.022]); weak +0.006"
 C1,2,ConvNeXt-Tiny learns complementary local evidence,Same labels windows split; independent pretrained initialization,1,done_not_supported,"2026-10-12 gold 0.740; vs D3 -0.080 [-0.110,-0.050]; weak -0.045"

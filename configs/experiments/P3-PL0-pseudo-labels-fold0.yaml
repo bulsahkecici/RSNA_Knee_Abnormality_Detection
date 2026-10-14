@@ -1,0 +1,46 @@
+# PL0: D3LR2 trained on fold-0-blind pseudo labels (pseudo-v1-nofold0). Prepared, not run.
+experiment_id: PL0
+phase: P3
+priority: 2
+status: prepared
+queue: docs/research/EXPERIMENT_QUEUE_20261009.csv
+hypothesis: Pseudo labels from out-of-fold teachers improve the D3LR2 recipe
+question: >
+  Same as D3LR2 except the training targets: 0.5 public-mean-v1 + 0.5 out-of-fold probability from teachers LR2I1-4, none of which saw fold 0, so the fold-0 weak score stays clean.
+control: D3LR2
+changes: [labels, train.label_source]
+folds: state/folds-v2-allgold.csv
+labels: {source: pseudo_v1_nofold0, file: state/soft-labels/pseudo-v1-nofold0.jsonl,
+         sha256: 1838f37972933d05730d47c6afbf910491f385223cbdf5f44c60ff7fb9903d77}
+cache:
+  name: v4-dense-three-series
+  storage: npz
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid]
+  centers: 12
+  img_size: 224
+  preprocess_hash: from_manifest
+weights: {encoder: dinov2_vits14, file: dinov2_vits14_pretrain.pth, sha256: configs/dinov2_vits14_allowlist.json}
+train:
+  profile: campaign
+  encoder: dinov2_vits14
+  init: official_pretrained
+  label_source: pseudo_v1_nofold0
+  pooling: mean
+  unfreeze_blocks: 4
+  unfreeze_after_epochs: 1
+  layer_decay: null
+  train_centers_per_slot: 6
+  img_size: 224
+  epochs: 8
+  effective_batch: 8
+  microbatch: 1
+  seed: 2026
+  lr_head: 0.0001
+  lr_backbone: 0.00002
+evaluation: {windows: all_centers, tta: null, splits: [gold, weak], targets: fixed hard masked labels}
+measure: [gold_macro_auc, weak_macro_auc, per_class_auc, epoch_wall_seconds, seconds_per_train_study,
+          peak_cuda_memory_bytes, evaluation_seconds, skipped_updates]
+max_full_runs: 1
+decision_criterion: >
+  Fixed 2026-10-13 before any teacher ran. Supported if the weak delta vs D3LR2 has ci95 lower bound > 0
+  and the gold_all delta is positive.

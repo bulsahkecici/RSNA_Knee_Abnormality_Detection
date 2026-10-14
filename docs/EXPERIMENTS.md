@@ -511,3 +511,21 @@ Rules fixed now:
 - **5-fold ensemble** (mean of D3LR2 + LR2F1–4, or of the student folds if a second round happens) is submitted instead of the single candidate only if it beats that candidate on gold_all with ci95 lower bound > 0 — the ensemble rule of 2026-10-12, unchanged.
 
 **D3ALLLR2 submission (2026-10-13): Kaggle 57143034, public 0.862** (D3ALL 57133827: 0.845). Validation run parity 0.0 on 58 gold (Colab T4 and Kaggle GPU produced identical predictions). The +0.017 public gain matches the local gold gain (+0.016) despite the best-of-three selection; local gold has tracked public in all three submissions so far (D3 +0.068 / D3ALL +0.010 / D3ALLLR2 +0.017 public vs +0.012 / +0.016 local where comparable).
+
+### 2026-10-14 — v5 does not help on the LR2 recipe; teachers done; pseudo tables built; students prepared
+
+All eleven archives passed review (D3LR2, V5LR2, V5ALLLR2 at `494d130`; teachers at `702261e`).
+
+| Arm | gold all | weak | Δ gold [95% CI] | Δ weak [95% CI] | Rule |
+|---|---:|---:|---|---|---|
+| D3LR2 vs D3 | 0.835 | 0.839 | +0.015 [+0.001, +0.030] | +0.015 [+0.009, +0.022] | **supported** — the LR2 gain now holds on weak too |
+| V5LR2 vs D3LR2 | 0.829 | 0.833 | −0.007 [−0.028, +0.014] | −0.005 [−0.011, +0.001] | not supported |
+| V5ALLLR2 vs D3ALLLR2 | 0.850 | — | +0.002 [−0.018, +0.024] | — | not a candidate (V5LR2 failed) |
+
+v5 (0.60 mm/px, 5 slots incl. structural sagittal/coronal, 252 px model) gives nothing on the current recipe, as on the old one (D2). Finer pixels at this step size, or the structural series, are not the missing piece; a 0.4 mm/px cache is not justified by this evidence.
+
+Teachers (gold / weak on their own held-out fold): D3LR2 0.835/0.839, LR2F1 0.849/0.846, LR2F2 0.837/0.861, LR2F3 0.842/0.861, LR2F4 0.844/0.845; fold-0-blind LR2I1–4 0.823–0.830 / 0.835–0.850 (trained on ~2,500 studies).
+
+Ensemble rule applied: mean of the 5 outer teachers on gold 0.844, Δ vs D3ALLLR2 −0.003 [−0.014, +0.008] — no ensemble submission.
+
+Pseudo tables (`scripts/build_pseudo_labels.py`, α = 0.5): `pseudo-v1-all` 4348 rows, folds 0–4, sha `660a4b57…`; `pseudo-v1-nofold0` 3479 rows, folds 1–4 from fold-0-blind teachers, sha `1838f379…`; no gold rows, every row has a public label. Students: **PL0** (D3LR2 + pseudo-v1-nofold0, control D3LR2) and **PLALL** (D3ALLLR2 + pseudo-v1-all, control D3ALLLR2), with the rules fixed on 2026-10-13 copied into their configs.
