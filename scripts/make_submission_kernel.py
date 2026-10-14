@@ -10,9 +10,11 @@ The kernel preprocesses test DICOMs with the exact source archive embedded in th
 cache kernel that built the arm's training cache (same build_cache call and policy),
 asserts the training preprocess hash, and predicts with the exact training source of
 the arm's notebook (load_trained_study + _predict over every cached window, as in the
-Colab evaluation). Outside the competition rerun it first re-preprocesses the 58 gold
-training studies and requires their probabilities to match the arm's reviewed Colab
-predictions.
+Colab evaluation). A KneeNet arm (make_kneenet_notebook.py) is predicted with the vetted
+reader's knee.py from its notebook, over all cached windows, in strict fp32. Outside the
+competition rerun it first re-preprocesses the 58 gold training studies and requires their
+probabilities to match the arm's reviewed Colab predictions (for KneeNet, its fp32 gold
+predictions when the notebook recorded them, otherwise its bf16-autocast ones).
 """
 from __future__ import annotations
 
@@ -27,7 +29,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPETITION = "rsna-knee-abnormality-detection"
-CACHE_KERNELS = {"171ef4fff32fdb62d850c0787dab55d7f4473d9cc0667a5699ec2fe9436afdf4": "rsna-v4-dense12-cache-20261009"}
+CACHE_KERNELS = {"171ef4fff32fdb62d850c0787dab55d7f4473d9cc0667a5699ec2fe9436afdf4": "rsna-v4-dense12-cache-20261009",
+                 "e0803730ba612c297040e16fc12a8d78301ed327f1aee8d52a1fbc1948ca4ee9": "rsna-v5-five256-shard0-20261010",
+                 "4b308824ad3953634c8baf79fd573a75db8839a5b53c55e5c458fd0253e2d0c2": "rsna-v5-five256-shard1-20261010"}
 WHEELS = ROOT / "artifacts/kaggle/v3-offline-asset/wheels"
 READER = "goodpjw2008/rsna-knee-2-5d-convnext-reader"  # eligible public reader (2026-10-14 check)
 READER_MODES = ("rank50", "reader_only", "route")  # route: listed findings from ours, the rest from the reader
@@ -43,26 +47,34 @@ def _assigned(text: str, names: set[str]) -> dict:
             if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name) and n.targets[0].id in names}
 
 
-def preprocess_source(cache_manifest_sha: str) -> tuple[bytes, dict, str]:
-    """The cache kernel's embedded source, its build_cache policy and the training preprocess hash."""
-    slug = CACHE_KERNELS[cache_manifest_sha]
-    folder = ROOT / "artifacts/kaggle" / slug
-    values = _assigned((folder / "entry.py").read_text(), {"SOURCE_B64", "SOURCE_SHA256", "POLICY"})
-    data = base64.b64decode(values["SOURCE_B64"])
-    if _sha(data) != values["SOURCE_SHA256"]:
-        raise SystemExit("cache kernel source archive does not match its recorded sha256")
-    result = json.loads((folder / "output/campaign-result.json").read_text())
-    if result["status"] != "ok" or result["manifest_sha256"] != cache_manifest_sha:
-        raise SystemExit("cache kernel result does not describe the arm's cache")
-    policy = dict(values["POLICY"], max_cache_bytes=18 * 1024**3, strict_series=True)
-    versions = {name: result["packages"][name] for name in ("numpy", "Pillow", "pydicom")}
-    return data, policy, result["preprocess_hash"], versions
+def preprocess_source(part_manifest_shas: list[str]) -> tuple[bytes, dict, str, dict]:
+    """The cache kernels' embedded source, build_cache policy and training preprocess hash; shard parts must agree."""
+    found = []
+    for cache_manifest_sha in part_manifest_shas:
+        folder = ROOT / "artifacts/kaggle" / CACHE_KERNELS[cache_manifest_sha]
+        values = _assigned((folder / "entry.py").read_text(), {"SOURCE_B64", "SOURCE_SHA256", "POLICY"})
+        data = base64.b64decode(values["SOURCE_B64"])
+        if _sha(data) != values["SOURCE_SHA256"]:
+            raise SystemExit("cache kernel source archive does not match its recorded sha256")
+        result = json.loads((folder / "output/campaign-result.json").read_text())
+        if result["status"] != "ok" or result["manifest_sha256"] != cache_manifest_sha:
+            raise SystemExit("cache kernel result does not describe the arm's cache")
+        policy = dict(values["POLICY"], max_cache_bytes=18 * 1024**3, strict_series=True)
+        versions = {name: result["packages"][name] for name in ("numpy", "Pillow", "pydicom")}
+        found.append((data, policy, result["preprocess_hash"], versions))
+    if any(f != found[0] for f in found[1:]):
+        raise SystemExit("cache shard kernels differ in source, policy, preprocess hash or pixel versions")
+    return found[0]
+
+
+def notebook_blob(exp: str, name: str) -> bytes:
+    notebook = json.loads((ROOT / "notebooks/generated" / f"{exp}.ipynb").read_text())
+    cell = next("".join(c["source"]) for c in notebook["cells"] if f"{name} = " in "".join(c["source"]))
+    return base64.b64decode(ast.literal_eval(cell.split(f"{name} = ", 1)[1].split("\n", 1)[0]))
 
 
 def training_source(exp: str, build: dict) -> bytes:
-    notebook = json.loads((ROOT / "notebooks/generated" / f"{exp}.ipynb").read_text())
-    cell = next("".join(c["source"]) for c in notebook["cells"] if "SOURCE_B64 = " in "".join(c["source"]))
-    data = base64.b64decode(ast.literal_eval(cell.split("SOURCE_B64 = ", 1)[1].split("\n", 1)[0]))
+    data = notebook_blob(exp, "SOURCE_B64")
     if _sha(data) != build["source_sha256"]:
         raise SystemExit("notebook source archive does not match build.json")
     return data
@@ -80,17 +92,30 @@ def _member(exp: str, parity_dir: Path | None) -> dict:
     checkpoint_sha = _sha(checkpoint.read_bytes())
     if checkpoint_sha != metrics["oof_provenance"]["checkpoint_sha256"]:
         raise SystemExit(f"{exp}: checkpoint does not match the evaluated checkpoint")
-    if parity_dir is None:
+    kneenet = build_info["train"].get("model") == "kneenet"
+    reference = "fp32" if kneenet and "gold_fp32" in metrics else ("bf16_autocast" if kneenet else "training_eval")
+    if parity_dir is not None:
+        parity = (parity_dir / f"{exp}.jsonl").read_bytes()
+    elif reference == "fp32":
+        from rsna_knee.ontology import TARGET_COLUMNS
+        parity = "".join(json.dumps({"StudyInstanceUID": u, **dict(zip(TARGET_COLUMNS, p, strict=True))}) + "\n"
+                         for u, p in sorted(metrics["gold_fp32"].items())).encode()
+    else:
         rows = [json.loads(x) for x in (out / "job/predictions.jsonl").read_text().splitlines()]
         parity = "".join(json.dumps(r) + "\n" for r in rows if r["split"] == "gold").encode()
-    else:
-        parity = (parity_dir / f"{exp}.jsonl").read_bytes()
     if not parity.strip():
         raise SystemExit(f"{exp}: no parity predictions")
     model = training_source(exp, build_info)
+    knee = None
+    if kneenet:
+        knee = notebook_blob(exp, "KNEE_B64")
+        if _sha(knee) != build_info["reader_code_sha256"] or _sha(knee) != ran["reader_code_sha256"]:
+            raise SystemExit(f"{exp}: knee.py in the notebook is not the vetted reader file the run used")
+    parts = [p["manifest_sha256"] for p in ran.get("cache_parts", [])] or [ran["cache_manifest_sha256"]]
     return {"exp": exp, "checkpoint": checkpoint, "checkpoint_sha256": checkpoint_sha, "model": model,
-            "parity": parity, "cache": ran["cache_manifest_sha256"], "git_commit": ran["git_commit"],
-            "gold": review["splits"]["gold_all"]["macro_auc"]}
+            "parity": parity, "cache": ran["cache_manifest_sha256"], "parts": parts, "git_commit": ran["git_commit"],
+            "gold": review["splits"]["gold_all"]["macro_auc"], "kind": "kneenet" if kneenet else "study",
+            "knee": knee, "parity_reference": reference}
 
 
 def build(exps: list[str], slug: str, parity_dir: Path | None = None, reader_eval: Path | None = None,
@@ -113,7 +138,7 @@ def build(exps: list[str], slug: str, parity_dir: Path | None = None, reader_eva
     members = [_member(exp, parity_dir) for exp in exps]
     if len({m["cache"] for m in members}) != 1 or len(set(exps)) != len(exps):
         raise SystemExit("ensemble members must be distinct and share one training cache")
-    pre, policy, preprocess_hash, pixel_versions = preprocess_source(members[0]["cache"])
+    pre, policy, preprocess_hash, pixel_versions = preprocess_source(members[0]["parts"])
 
     asset = ROOT / "artifacts/kaggle" / f"{slug}-asset"
     staged = asset / "bundle"
@@ -127,6 +152,8 @@ def build(exps: list[str], slug: str, parity_dir: Path | None = None, reader_eva
         (staged / "members" / m["exp"]).mkdir(parents=True)
         shutil.copyfile(m["checkpoint"], staged / "members" / m["exp"] / "checkpoint.pt")
         (staged / "members" / m["exp"] / "parity.jsonl").write_bytes(m["parity"])
+        if m["knee"] is not None:  # the vetted reader's model code (Apache-2.0, goodpjw2008)
+            (staged / "members" / m["exp"] / "knee.py").write_bytes(m["knee"])
     reader = None
     if reader_eval is not None:
         pinned = json.loads((reader_eval / "reader-files.json").read_text())
@@ -143,7 +170,8 @@ def build(exps: list[str], slug: str, parity_dir: Path | None = None, reader_eva
     identity = {"experiment": "+".join(exps), "ensemble": "equal-weight mean of probabilities" if len(exps) > 1 else None,
                 "members": [{"experiment": m["exp"], "checkpoint_sha256": m["checkpoint_sha256"],
                              "training_source_sha256": _sha(m["model"]), "git_commit": m["git_commit"],
-                             "gold_all_macro_auc": m["gold"]} for m in members],
+                             "gold_all_macro_auc": m["gold"], "kind": m["kind"],
+                             "parity_reference": m["parity_reference"]} for m in members],
                 "preprocess_source_sha256": _sha(pre), "preprocess_hash": preprocess_hash, "policy": policy,
                 "training_pixel_versions": pixel_versions, "cache_manifest_sha256": members[0]["cache"],
                 "img_size": int(policy["size"]), "codec_pins": CODEC_PINS, "reader": reader}
@@ -204,6 +232,7 @@ if __name__ == "__main__":  # cache workers may re-import this module
     p = spec["policy"]
     m = cache_build.build_cache(series_csv=Path(spec["series_csv"]), dicom_root=Path(spec["dicom_root"]),
         dest=Path(spec["dest"]), study_ids=spec["study_ids"], size=p["size"], n_centers=p["n_centers"],
+        crop_mm=p.get("crop_mm", 160.0), intensity=p.get("intensity", "slice"),  # the cache kernels' defaults
         center_lower=p["center_lower"], center_upper=p["center_upper"], slots=getattr(cache_build, p["slots"]),
         strict_series=spec["strict"], resume=True, max_cache_bytes=p["max_cache_bytes"], workers=spec["workers"],
         progress_every=100, index_flush_every=100)
@@ -232,6 +261,50 @@ for manifest_path in spec["manifests"]:
     got, _, probs, _ = _predict(model, batches, device)
     for uid, prob in zip(got, probs, strict=True):
         done[uid] = dict(zip(TARGET_COLUMNS, map(float, prob), strict=True))
+with open(spec["out"], "w") as handle:
+    for uid, prob in done.items():
+        handle.write(json.dumps({"StudyInstanceUID": uid, **prob}) + "\\n")
+print(json.dumps({"predicted": len(done), "device": str(device), "targets": TARGET_COLUMNS}), flush=True)
+"""
+
+PREDICT_KNEENET = """
+import json, sys
+from pathlib import Path
+import numpy as np, torch
+spec = json.load(open(sys.argv[1]))
+sys.path.insert(0, spec["knee_dir"])
+import knee
+from rsna_knee.ontology import TARGET_COLUMNS
+from rsna_knee.runtime.train_payload import load_volume
+assert list(knee.LABELS) == list(TARGET_COLUMNS), "reader label order differs"
+torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = False  # strict fp32, as the parity reference
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+ck = torch.load(spec["checkpoint"], map_location="cpu", weights_only=False)
+cfg = ck["kneenet"]
+model = knee.KneeNet(cfg["backbone"], pretrained=False, dim=int(cfg["dim"]), depth=int(cfg["depth"]))
+model.load_state_dict(ck["model"])
+model = model.to(device).to(memory_format=torch.channels_last).eval()
+done = {}
+for manifest_path in spec["manifests"]:
+    manifest = json.load(open(manifest_path))
+    policy = manifest["preprocess_config"]
+    slot_map = [knee.slot_of(plane, kind == "fluid") for plane, kind in policy["slots"]]
+    n_c = int(policy["n_centers"])
+    positions = np.linspace(float(policy["center_lower"]), float(policy["center_upper"]), n_c).astype(np.float32)
+    for uid in [u for u in spec["study_ids"] if u in manifest["studies"] and u not in done]:
+        meta = manifest["studies"][uid]
+        vol = load_volume(uid, meta, Path(manifest_path).parent)
+        present = meta.get("slot_mask") or [1] * vol.shape[0]
+        # as the notebook's evaluation: every cached window of every present slot, in the reader's slot layout
+        x = np.zeros((knee.N_SLOTS, n_c) + vol.shape[2:], np.uint8)
+        mask, pos = np.zeros(knee.N_SLOTS, bool), np.zeros((knee.N_SLOTS, n_c), np.float32)
+        for s in range(vol.shape[0]):
+            if present[s]:
+                t = slot_map[s]
+                x[t], mask[t], pos[t] = vol[s], True, positions
+        with torch.no_grad():
+            p = model(*(torch.from_numpy(a)[None].to(device) for a in (x, mask, pos)), res=int(cfg["res"]))
+        done[uid] = dict(zip(TARGET_COLUMNS, map(float, p.float().sigmoid()[0].cpu().numpy()), strict=True))
 with open(spec["out"], "w") as handle:
     for uid, prob in done.items():
         handle.write(json.dumps({"StudyInstanceUID": uid, **prob}) + "\\n")
@@ -340,9 +413,12 @@ def predict(manifests, uids, out, member, deps, asset):
     """One member's predictions with that member's own training source."""
     src = unpack(asset / f"model-source-{member['training_source_sha256'][:16]}.blob",
                  TMP / ("model-source-" + member["training_source_sha256"][:16]))
-    return run(PREDICT, {"manifests": [str(m) for m in manifests], "study_ids": uids, "out": str(out),
-                         "checkpoint": str(asset / "members" / member["experiment"] / "checkpoint.pt"),
-                         "img_size": IDENTITY["img_size"]}, src, deps, "predict-" + out.stem)
+    spec = {"manifests": [str(m) for m in manifests], "study_ids": uids, "out": str(out),
+            "checkpoint": str(asset / "members" / member["experiment"] / "checkpoint.pt"), "img_size": IDENTITY["img_size"]}
+    if member.get("kind") == "kneenet":
+        return run(PREDICT_KNEENET, dict(spec, knee_dir=str(asset / "members" / member["experiment"])), src, deps,
+                   "predict-" + out.stem)
+    return run(PREDICT, spec, src, deps, "predict-" + out.stem)
 
 
 def predict_all(manifests, uids, stem, deps, asset):
