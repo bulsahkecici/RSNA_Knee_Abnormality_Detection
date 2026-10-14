@@ -542,3 +542,13 @@ Our members are too similar to gain from averaging (weak +0.002 at best). A stru
 - Verdict: **eligible under our policy** (claims are the author's; the training run itself cannot be re-verified). The author's 0.944 stack also uses OAI-trained components; only the reader is considered here. Claimed public score of the reader alone: 0.929.
 
 **Rule, fixed before any reader prediction on gold is seen.** R = reader (mean of its 3 folds, its own `infer.py`); O = our current candidate (D3ALLLR2, or PLALL if it passes its rule); B = per-finding rank average 0.5·R + 0.5·O (one fixed weight, no tuning on gold). On gold_all: the candidate is B if B ≥ R − 0.005, else R; it replaces O only if its paired gold_all delta vs O has ci95 lower bound > 0. Gold only (the reader's predictions on our weak studies are in-sample for it). Scoring kernel: `scripts/make_reader_eval_kernel.py` (runs the reader on gold-58, records the sha256 of every reader file for pinning).
+
+### 2026-10-14 — Pseudo labels and lr 4e-5: no supported gain
+
+| Arm vs control | gold all | Δ gold [95% CI] | Δ weak [95% CI] | Rule |
+|---|---:|---|---|---|
+| PL0 vs D3LR2 (fold-0-blind pseudo labels) | 0.835 | +0.000 [−0.009, +0.009] | −0.002 [−0.005, +0.002] | not supported |
+| PLALL vs D3ALLLR2 (5-fold pseudo labels) | 0.848 | +0.000 [−0.008, +0.009] | — | not a candidate (PL0 failed) |
+| D3LR4 vs D3LR2 (lr_backbone 4e-5) | 0.841 | +0.006 [−0.009, +0.022] | +0.004 [−0.001, +0.009] | not supported (weak CI includes 0) |
+
+Pseudo labels from teachers of the same recipe (α = 0.5) change nothing on gold or weak: the teachers agree with the public labels they were trained on and add little new information — the same family as the NTejas OOF self-distillation negative (2026-10-09 notes). The pseudo-label gains reported by ≥ 0.95 teams presumably come from stronger, more diverse teachers. lr 4e-5 trends up (+0.004 weak) but is not separable from noise; no all-folds LR4 arm is pre-registered. The candidate stays **D3ALLLR2** (public 0.862), which is also O in the reader blend rule.
