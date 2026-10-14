@@ -120,8 +120,10 @@ micro = min(micro, int(T['batch'])); accum = int(T['batch']) // micro
 workers = max(2, min(8, os.cpu_count() or 2))
 train_uids = [u for u in EXPERIMENT['train_uids'] if u in STUDIES]
 assert len(train_uids) == len(EXPERIMENT['train_uids']), 'train studies missing from the cache'
+# workers are re-seeded from the main torch RNG every epoch (no persistent workers), so a resumed run draws the
+# same augmentation streams as an uninterrupted one
 train_dl = torch.utils.data.DataLoader(V5Study(train_uids, int(T['k']), True), batch_size=micro, shuffle=True,
-                                       drop_last=True, num_workers=workers, pin_memory=True, persistent_workers=True)
+                                       drop_last=True, num_workers=workers, pin_memory=True)
 model = knee.KneeNet(T['backbone'], pretrained=False, dim=int(T['dim']), depth=int(T['depth']))
 missing, unexpected = model.enc.load_state_dict(load_file(str(weights)), strict=False)
 assert not missing and set(unexpected) <= {'head.fc.weight', 'head.fc.bias'}, (missing, unexpected)
@@ -138,19 +140,19 @@ sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / warm
 identity = {'id': EXPERIMENT['id'], 'config_sha256': EXPERIMENT['config_sha256'], 'train_uids_sha256': EXPERIMENT['train_uids_sha256'],
             'micro': micro, 'accum': accum}
 state_path = WORK / 'kneenet-state.pt'
-step, start_ep, epoch_seconds = 0, 0, []
+step, skipped, start_ep, epoch_seconds = 0, 0, 0, []  # step counts applied updates; fp16 overflows are skipped
 if state_path.is_file():  # resume after a disconnect: Drive keeps the last finished epoch
     st = torch.load(state_path, map_location='cpu', weights_only=False)
     assert st['identity'] == identity, 'state file belongs to another run; move it away to start over'
     model.load_state_dict(st['model']); ema.load_state_dict(st['ema']); opt.load_state_dict(st['opt'])
     sched.load_state_dict(st['sched']); scaler.load_state_dict(st['scaler'])
-    step, start_ep, epoch_seconds = st['step'], st['epoch'] + 1, st['epoch_seconds']
-    torch.set_rng_state(st['rng']); np.random.set_state(st['np_rng'])
+    step, skipped, start_ep, epoch_seconds = st['step'], st['skipped'], st['epoch'] + 1, st['epoch_seconds']
+    torch.set_rng_state(st['rng']); torch.cuda.set_rng_state_all(st['cuda_rng'])
+    np.random.set_state(st['np_rng']); random.setstate(st['py_rng'])
     print(f'Resumed after epoch {st["epoch"]}', flush=True)
 print(f'GPU {torch.cuda.get_device_name(0)} | {amp_dtype} | micro {micro} x accum {accum} | {len(train_uids)} studies | '
       f'{per_epoch} steps/epoch | workers {workers}', flush=True)
 started = time.time()
-skipped = 0
 for ep in range(start_ep, int(T['epochs'])):
     model.train(); t_ep, tot, n = time.time(), 0.0, 0
     opt.zero_grad(set_to_none=True)
@@ -168,7 +170,8 @@ for ep in range(start_ep, int(T['epochs'])):
         before = scaler.get_scale()
         scaler.step(opt); scaler.update(); opt.zero_grad(set_to_none=True)
         if scaler.is_enabled() and scaler.get_scale() < before:
-            skipped += 1  # fp16 overflow: the optimizer step was skipped
+            skipped += 1  # fp16 overflow: the optimizer step was skipped, so schedule and EMA stay put
+            continue
         sched.step(); step += 1
         d = min(float(T['ema']), (1 + step) / (10 + step))
         with torch.no_grad():
@@ -182,8 +185,9 @@ for ep in range(start_ep, int(T['epochs'])):
     epoch_seconds.append(round(time.time() - t_ep, 1))
     print(f'epoch {ep} loss {tot / max(n, 1):.4f} {epoch_seconds[-1] / 60:.1f} min', flush=True)
     torch.save({'identity': identity, 'model': model.state_dict(), 'ema': ema.state_dict(), 'opt': opt.state_dict(),
-                'sched': sched.state_dict(), 'scaler': scaler.state_dict(), 'step': step, 'epoch': ep,
-                'epoch_seconds': epoch_seconds, 'rng': torch.get_rng_state(), 'np_rng': np.random.get_state()},
+                'sched': sched.state_dict(), 'scaler': scaler.state_dict(), 'step': step, 'skipped': skipped, 'epoch': ep,
+                'epoch_seconds': epoch_seconds, 'rng': torch.get_rng_state(), 'cuda_rng': torch.cuda.get_rng_state_all(),
+                'np_rng': np.random.get_state(), 'py_rng': random.getstate()},
                str(state_path) + '.tmp')
     os.replace(str(state_path) + '.tmp', state_path)
 
@@ -204,7 +208,7 @@ for split, uids in (('gold', EXPERIMENT['gold_uids']), ('weak', EXPERIMENT['weak
 (job / 'predictions.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows))
 (job / 'metrics.json').write_text(json.dumps({
     'kind': 'real', 'model': 'kneenet', 'train_uids': sorted(train_uids), 'epoch_wall_seconds': epoch_seconds,
-    'skipped_updates': skipped, 'attempted_updates': step, 'amp_dtype': str(amp_dtype), 'micro_batch': micro,
+    'skipped_updates': skipped, 'applied_updates': step, 'attempted_updates': step + skipped, 'amp_dtype': str(amp_dtype), 'micro_batch': micro,
     'oof_provenance': {'checkpoint_sha256': sha256_file(ckpt), 'encoder': 'kneenet_' + T['backbone'], 'step': step},
     'n_gold': sum(r['split'] == 'gold' for r in rows), 'n_weak': sum(r['split'] == 'weak' for r in rows)}, indent=2))
 (WORK / 'campaign-result.json').write_text(json.dumps({'exit_reason': 'ok', 'model': 'kneenet'}))
