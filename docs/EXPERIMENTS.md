@@ -529,3 +529,5 @@ Teachers (gold / weak on their own held-out fold): D3LR2 0.835/0.839, LR2F1 0.84
 Ensemble rule applied: mean of the 5 outer teachers on gold 0.844, Δ vs D3ALLLR2 −0.003 [−0.014, +0.008] — no ensemble submission.
 
 Pseudo tables (`scripts/build_pseudo_labels.py`, α = 0.5): `pseudo-v1-all` 4348 rows, folds 0–4, sha `660a4b57…`; `pseudo-v1-nofold0` 3479 rows, folds 1–4 from fold-0-blind teachers, sha `1838f379…`; no gold rows, every row has a public label. Students: **PL0** (D3LR2 + pseudo-v1-nofold0, control D3LR2) and **PLALL** (D3ALLLR2 + pseudo-v1-all, control D3ALLLR2), with the rules fixed on 2026-10-13 copied into their configs.
+
+**Ensembles of our own fold-0 models (2026-10-14, descriptive, weak-scored).** Versus D3LR2 alone: D3LR2 + D3E12 gold +0.004 [−0.002, +0.010], weak +0.0015 [−0.001, +0.004]; adding D3, D3S2 or C2 lowers both (to −0.002 weak). Our members share data, labels, backbone and cache, so their errors are correlated; the best two average for at most ~+0.002–0.004. An ensemble worth its cost needs a structurally different member (e.g. an eligible ConvNeXt reader), not more of our DINOv2 runs.
