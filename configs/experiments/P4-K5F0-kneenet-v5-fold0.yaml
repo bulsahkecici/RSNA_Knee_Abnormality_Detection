@@ -1,0 +1,48 @@
+# K5F0: the vetted public reader's KneeNet recipe, trained by us on our v5 cache, outer fold 0. Prepared, not run.
+experiment_id: K5F0
+phase: P4
+status: prepared
+hypothesis: The public reader's model and training recipe, trained by us on our own v5 cache, beats our DINOv2 recipe
+question: >
+  The reader scores 0.911 on gold with 0.6 mm/px inputs, about the resolution of our v5 cache, while our DINOv2
+  recipe scores 0.83-0.85: the gap is the model and training, not the pixels. With our v5 cache (5 of the reader's
+  6 series slots; axial non-fat-suppressed is masked), our folds and train UIDs, and the reader's KneeNet code,
+  labels (mean of four CC0 tables) and optimisation (full fine-tune, EMA, augmentation), how close do we get?
+control: D3LR2
+changes: [model, labels, cache, schedule]
+folds: state/folds-v2-allgold.csv
+labels: {source: public_mean4_v0, file: state/soft-labels/public-mean4-v0.jsonl,
+         sha256: 941766e7af92ae5581189115c97c28584a8273ad071b78f9cc1b1a154c926f2a}
+cache:
+  name: v5-five256-series-window
+  storage: npz
+  shards: [bulsahkecici/rsna-v5-five256-shard0-20261010, bulsahkecici/rsna-v5-five256-shard1-20261010]
+  slots: [Sagittal:fluid, Coronal:fluid, Axial:fluid, Sagittal:structural, Coronal:structural]
+  centers: 12
+  img_size: 256
+  crop_mm: 154
+  intensity: series
+  preprocess_hash: from_manifest
+weights: {encoder: convnext_tiny, file: convnext_tiny.in12k_ft_in1k/model.safetensors,
+          sha256: a1aefa409b513cf209b085424eb3efffe4e4a9f511491bc2c12ea35209e6bb95}
+reader_code: {dataset: goodpjw2008/rsna-knee-2-5d-convnext-reader, file: knee.py, license: Apache-2.0,
+              sha256: 314c2af387a5cbd1d25f192f19f4ecc6d4ae4b30403e92e9d9b3ed2c325880b1}
+train:
+  model: kneenet          # reader's KneeNet: ConvNeXt-T on 3-slice windows -> slot/position tokens -> 2-layer transformer -> per-finding attention
+  backbone: convnext_tiny
+  dim: 384
+  depth: 2
+  res: 256                # model input; the reader's make_views crops 0.92 of the field of view and resamples
+  k: 8                    # training windows per slot, sampled one per stratum of our 12 cached windows
+  epochs: 14
+  batch: 8                # effective; micro-batched on smaller GPUs
+  lr: 0.0001              # whole backbone
+  lr_head: 0.0005
+  wd: 0.02
+  ema: 0.998
+  clip: 3.0
+  seed: 2026
+decision_criterion: >
+  Fixed 2026-10-14 before the run. Supported if the paired gold_all delta vs D3LR2 has ci95 lower bound > 0.
+  Weak AUC is reported but not decisive: it is scored against our hard labels, which this arm no longer trains on
+  (as with L1, a label change can lower it).
