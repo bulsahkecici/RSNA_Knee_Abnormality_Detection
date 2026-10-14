@@ -29,6 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPETITION = "rsna-knee-abnormality-detection"
 CACHE_KERNELS = {"171ef4fff32fdb62d850c0787dab55d7f4473d9cc0667a5699ec2fe9436afdf4": "rsna-v4-dense12-cache-20261009"}
 WHEELS = ROOT / "artifacts/kaggle/v3-offline-asset/wheels"
+READER = "goodpjw2008/rsna-knee-2-5d-convnext-reader"  # eligible public reader (2026-10-14 check)
+READER_MODES = ("rank50", "reader_only")
 CODEC_PINS = {"pydicom": "3.0.1", "pylibjpeg": "2.1.0", "pylibjpeg-libjpeg": "2.4.0", "pylibjpeg-openjpeg": "2.6.0"}
 
 
@@ -91,8 +93,16 @@ def _member(exp: str, parity_dir: Path | None) -> dict:
             "gold": review["splits"]["gold_all"]["macro_auc"]}
 
 
-def build(exps: list[str], slug: str, parity_dir: Path | None = None) -> tuple[Path, Path]:
-    """One reviewed arm, or several averaged with equal weight; all must share one training cache."""
+def build(exps: list[str], slug: str, parity_dir: Path | None = None, reader_eval: Path | None = None,
+          reader_mode: str | None = None) -> tuple[Path, Path]:
+    """One reviewed arm, or several averaged with equal weight; all must share one training cache.
+
+    With reader_eval (the output folder of scripts/make_reader_eval_kernel.py) the public reader is
+    pinned by its recorded file hashes, parity-checked against its recorded gold predictions, and
+    combined with ours per finding: rank50 = 0.5 rank(ours) + 0.5 rank(reader); reader_only = reader.
+    """
+    if (reader_eval is None) != (reader_mode is None) or (reader_mode and reader_mode not in READER_MODES):
+        raise SystemExit("give --reader-eval and --reader-mode together")
     members = [_member(exp, parity_dir) for exp in exps]
     if len({m["cache"] for m in members}) != 1 or len(set(exps)) != len(exps):
         raise SystemExit("ensemble members must be distinct and share one training cache")
@@ -110,6 +120,15 @@ def build(exps: list[str], slug: str, parity_dir: Path | None = None) -> tuple[P
         (staged / "members" / m["exp"]).mkdir(parents=True)
         shutil.copyfile(m["checkpoint"], staged / "members" / m["exp"] / "checkpoint.pt")
         (staged / "members" / m["exp"] / "parity.jsonl").write_bytes(m["parity"])
+    reader = None
+    if reader_eval is not None:
+        pinned = json.loads((reader_eval / "reader-files.json").read_text())
+        if pinned["dataset"] != READER or "infer.py" not in pinned["files"]:
+            raise SystemExit("reader-files.json does not describe the vetted reader")
+        (staged / "reader").mkdir()
+        shutil.copyfile(reader_eval / "reader-gold.csv", staged / "reader" / "parity.csv")
+        reader = {"dataset": READER, "files": pinned["files"], "mode": reader_mode, "weight": 0.5,
+                  "checkpoints": [f"cnxt_v0_fold{k}.pt" for k in range(3)]}
     for wheel in sorted(WHEELS.glob("*.whl")):
         shutil.copyfile(wheel, staged / "wheels" / wheel.name)
     files = {str(p.relative_to(staged)): _sha(p.read_bytes()) for p in sorted(staged.rglob("*")) if p.is_file()}
@@ -119,7 +138,7 @@ def build(exps: list[str], slug: str, parity_dir: Path | None = None) -> tuple[P
                              "gold_all_macro_auc": m["gold"]} for m in members],
                 "preprocess_source_sha256": _sha(pre), "preprocess_hash": preprocess_hash, "policy": policy,
                 "training_pixel_versions": pixel_versions, "cache_manifest_sha256": members[0]["cache"],
-                "img_size": int(policy["size"]), "codec_pins": CODEC_PINS}
+                "img_size": int(policy["size"]), "codec_pins": CODEC_PINS, "reader": reader}
     (staged / "MANIFEST.json").write_text(json.dumps({"internet_required": False, "identity": identity, "files": files},
                                                      indent=2))
     upload = asset / "upload"
@@ -139,7 +158,8 @@ def build(exps: list[str], slug: str, parity_dir: Path | None = None) -> tuple[P
     (kernel_dir / "kernel-metadata.json").write_text(json.dumps({
         "id": f"bulsahkecici/{slug}", "title": slug, "code_file": "entry.py", "language": "python",
         "kernel_type": "script", "is_private": True, "enable_gpu": True, "enable_internet": False,
-        "competition_sources": [COMPETITION], "dataset_sources": [dataset], "kernel_sources": []}, indent=2))
+        "competition_sources": [COMPETITION], "dataset_sources": [dataset] + ([READER] if reader else []),
+        "kernel_sources": []}, indent=2))
     return upload, kernel_dir
 
 
@@ -208,6 +228,19 @@ with open(spec["out"], "w") as handle:
     for uid, prob in done.items():
         handle.write(json.dumps({"StudyInstanceUID": uid, **prob}) + "\\n")
 print(json.dumps({"predicted": len(done), "device": str(device), "targets": TARGET_COLUMNS}), flush=True)
+"""
+
+
+READER_RUN = """
+import json, os, sys
+spec = json.load(open(sys.argv[1]))
+sys.path.insert(0, spec["reader_dir"])
+os.chdir(spec["workdir"])
+import infer  # the reader's own inference code
+df = infer.run(spec["data_dir"], spec["split"], spec["ckpts"], studies=spec["studies"])
+assert len(df) == len(spec["studies"]) and df.notna().all().all(), "reader did not score every study"
+df.to_csv(spec["out"])
+print(json.dumps({"n": len(df), "targets": list(df.columns)}), flush=True)
 """
 
 
@@ -324,6 +357,40 @@ def check_policy(built, name):
     return built["pixel_runtime_versions"] == IDENTITY["training_pixel_versions"]
 
 
+def find_reader():
+    spec = IDENTITY["reader"]
+    found = [p.parent for p in INPUTS.rglob("infer.py") if (p.parent / spec["checkpoints"][0]).is_file()]
+    assert len(found) == 1, f"expected one reader dataset, found {found}"
+    for name, expected in spec["files"].items():
+        assert sha256(found[0] / name) == expected, f"reader file changed since it was vetted: {name}"
+    return found[0]
+
+
+def reader_predict(reader, comp, split, uids, name, deps):
+    out = TMP / f"{name}.csv"
+    (TMP / name).mkdir(parents=True, exist_ok=True)
+    info = run(READER_RUN, {"reader_dir": str(reader), "workdir": str(TMP / name), "data_dir": str(comp), "split": split,
+                            "ckpts": [str(reader / c) for c in IDENTITY["reader"]["checkpoints"]], "studies": uids,
+                            "out": str(out)}, reader, deps, name)
+    with out.open(newline="") as handle:
+        rows = {r["StudyInstanceUID"]: {t: float(r[t]) for t in info["targets"]} for r in csv.DictReader(handle)}
+    return rows, info["targets"]
+
+
+def normalized_ranks(values):
+    """Average ranks scaled to (0, 1]; per-finding AUC only depends on order."""
+    order = sorted(range(len(values)), key=values.__getitem__)
+    ranks, i = [0.0] * len(values), 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        for k in range(i, j + 1):
+            ranks[order[k]] = ((i + j) / 2 + 1) / len(values)
+        i = j + 1
+    return ranks
+
+
 def read_jsonl(path):
     return {r["StudyInstanceUID"]: r for r in map(json.loads, path.read_text().splitlines())}
 
@@ -365,6 +432,16 @@ def main():
         print("parity", json.dumps(result["parity"]), flush=True)
         assert result["parity"]["max_abs"] <= PARITY_MAX_ABS and result["parity"]["mean_abs"] <= PARITY_MEAN_ABS, \
             "test-time pipeline does not reproduce the reviewed Colab predictions"
+        if IDENTITY["reader"]:
+            with (asset / "reader" / "parity.csv").open(newline="") as handle:
+                ref = {r["StudyInstanceUID"]: r for r in csv.DictReader(handle)}
+            got, rt = reader_predict(find_reader(), comp, "train", sorted(ref), "reader-parity", deps)
+            diffs = [abs(got[u][t] - float(ref[u][t])) for u in ref for t in rt]
+            result["reader_parity"] = {"n_studies": len(ref), "max_abs": max(diffs), "mean_abs": sum(diffs) / len(diffs)}
+            atomic_json(WORK / "offline-result.json", result)
+            print("reader parity", json.dumps(result["reader_parity"]), flush=True)
+            assert result["reader_parity"]["max_abs"] <= PARITY_MAX_ABS and \
+                result["reader_parity"]["mean_abs"] <= PARITY_MEAN_ABS, "reader does not reproduce its vetted gold predictions"
 
     with (comp / "test.csv").open(newline="") as handle:
         studies = [row["StudyInstanceUID"] for row in csv.DictReader(handle)]
@@ -392,12 +469,27 @@ def main():
     missing = [u for u in studies if u not in probs]
     assert len(missing) <= MAX_FALLBACK_FRACTION * len(studies), f"{len(missing)} test studies could not be preprocessed"
     fallback = {t: sum(p[t] for p in probs.values()) / len(probs) if probs else 0.5 for t in targets}
+    final = {uid: probs.get(uid, fallback) for uid in studies}
+    if IDENTITY["reader"]:
+        theirs, rt = reader_predict(find_reader(), comp, "test", studies, "reader-test", deps)
+        assert sorted(rt) == sorted(targets), "reader targets differ from the submission columns"
+        if IDENTITY["reader"]["mode"] == "reader_only":
+            final = {uid: theirs[uid] for uid in studies}
+        else:  # per-finding rank average, equal weight
+            w = IDENTITY["reader"]["weight"]
+            mixed = {uid: {} for uid in studies}
+            for t in targets:
+                ro = normalized_ranks([final[u][t] for u in studies])
+                rr = normalized_ranks([theirs[u][t] for u in studies])
+                for u, a, b in zip(studies, ro, rr, strict=True):
+                    mixed[u][t] = (1 - w) * a + w * b
+            final = mixed
+        result["reader_mode"] = IDENTITY["reader"]["mode"]
     with (WORK / "submission.csv").open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(columns)
         for uid in studies:
-            row = probs.get(uid, fallback)
-            writer.writerow([uid, *[repr(float(row[t])) for t in targets]])
+            writer.writerow([uid, *[repr(float(final[uid][t])) for t in targets]])
     with (WORK / "submission.csv").open(newline="") as handle:
         rows = list(csv.DictReader(handle))
     assert [r["StudyInstanceUID"] for r in rows] == studies
@@ -425,8 +517,10 @@ def main() -> None:
     parser.add_argument("experiments", nargs="+", help="one reviewed arm, or several to average")
     parser.add_argument("--slug", required=True)
     parser.add_argument("--parity-dir", type=Path, help="rehearsal only: <experiment>.jsonl files replace the reviewed gold predictions")
+    parser.add_argument("--reader-eval", type=Path, help="output folder of the reader gold-eval kernel")
+    parser.add_argument("--reader-mode", choices=READER_MODES)
     args = parser.parse_args()
-    upload, kernel = build(args.experiments, args.slug, args.parity_dir)
+    upload, kernel = build(args.experiments, args.slug, args.parity_dir, args.reader_eval, args.reader_mode)
     print(upload)
     print(kernel)
 
