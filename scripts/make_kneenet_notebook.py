@@ -52,7 +52,7 @@ from rsna_knee.hashing import sha256_file
 from rsna_knee.ontology import TARGET_COLUMNS
 from rsna_knee.runtime.train_payload import load_volume
 import knee
-assert knee.LABELS == TARGET_COLUMNS, 'reader label order differs'
+assert list(knee.LABELS) == list(TARGET_COLUMNS), 'reader label order differs'
 if len(part_manifests) == 1:
     manifest_path = part_manifests[0]
 else:  # move shard parts into one directory; manifest_ready below re-verifies every shard
