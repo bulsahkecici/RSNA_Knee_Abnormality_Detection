@@ -1,0 +1,20 @@
+name: tf_efficientnetv2_s
+family: efficientnetv2
+timm_name: tf_efficientnetv2_s
+pretrained_tag: in21k_ft_in1k
+license: Apache-2.0
+weights_sha256_allowlist:
+- 6f1933fb6c0d760eae03863ad0110570393e16c0610f8fe94dc9f978e52ec59c
+input_normalization:
+  mean:
+  - 0.5
+  - 0.5
+  - 0.5
+  std:
+  - 0.5
+  - 0.5
+  - 0.5
+pretrained_classifier_keys:
+- classifier.weight
+- classifier.bias
+weights_url: https://huggingface.co/timm/tf_efficientnetv2_s.in21k_ft_in1k/resolve/ea9abc143ea2b9d8e1ec1de277bce02149b9cf0e/model.safetensors

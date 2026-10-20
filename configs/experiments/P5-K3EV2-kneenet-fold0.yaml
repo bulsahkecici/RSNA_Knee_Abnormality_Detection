@@ -1,0 +1,91 @@
+experiment_id: K3EV2
+phase: P5
+status: prepared_not_run
+hypothesis: One complementary EfficientNetV2-S pretrained encoder package at matched
+  K1 geometry, labels, fold and schedule.
+question: Matched label/schedule/seed control; no result is claimed.
+control: K1
+changes:
+- efficientnetv2_s_encoder_pretraining_and_required_normalization
+folds: state/folds-v2-allgold.csv
+labels:
+  source: public_mean4_v0
+  file: state/soft-labels/public-mean4-v0.jsonl
+  sha256: 941766e7af92ae5581189115c97c28584a8273ad071b78f9cc1b1a154c926f2a
+cache:
+  name: k1-canonical-volumes-v1
+  img_size: 384
+  crop_mm: 153.6
+  max_slices: 64
+  storage: ragged_npz
+  slot_key: Anatomical_Plane + Fat_Suppression
+  all_series_candidates: true
+  preprocess_hash: from_manifest
+weights:
+  encoder: tf_efficientnetv2_s
+  file: tf_efficientnetv2_s.in21k_ft_in1k/model.safetensors
+  runtime_file: tf_efficientnetv2_s.in21k_ft_in1k.safetensors
+  url: https://huggingface.co/timm/tf_efficientnetv2_s.in21k_ft_in1k/resolve/ea9abc143ea2b9d8e1ec1de277bce02149b9cf0e/model.safetensors
+  sha256: 6f1933fb6c0d760eae03863ad0110570393e16c0610f8fe94dc9f978e52ec59c
+reader_code:
+  dataset: goodpjw2008/rsna-knee-2-5d-convnext-reader
+  file: knee.py
+  license: Apache-2.0
+  sha256: 314c2af387a5cbd1d25f192f19f4ecc6d4ae4b30403e92e9d9b3ed2c325880b1
+train:
+  model: kneenet
+  backbone: tf_efficientnetv2_s
+  dim: 384
+  depth: 2
+  res: 256
+  k: 8
+  epochs: 14
+  batch: 8
+  lr: 0.0001
+  lr_head: 0.0005
+  wd: 0.02
+  ema: 0.998
+  clip: 3.0
+  seed: 2026
+  micro_batch: 1
+decision_criterion: 'Fixed before runs: weak macro AUC delta >= +0.004 and paired
+  bootstrap 95% lower bound > 0; report gold/class regressions and confirm direction
+  on a second outer fold.'
+outer_fold: '0'
+uid_selection: soft_targets
+eval_precision: fp32
+decision_rule:
+  split: weak_hard_labels
+  min_delta: 0.004
+  ci95_lower_gt: 0.0
+  bootstrap_seed: 2026
+  n_boot: 2000
+  require_complete_pairs: true
+  require_second_outer_fold_same_direction: true
+  max_full_fold0_runs: 1
+  gold: Repeatedly used development set; report delta/CI and every class regression,
+    not independent test.
+  promotion: No automatic submission or promotion; existing submission gates still
+    apply.
+prerequisites:
+- Real train-only GPU calibration must pass; API-confirmed remaining GPU quota >=
+  10.5h.
+cache_layout: canonical_volumes
+eval_windows: 12
+input_normalization:
+  mean:
+  - 0.5
+  - 0.5
+  - 0.5
+  std:
+  - 0.5
+  - 0.5
+  - 0.5
+pretrained_classifier_keys:
+- classifier.weight
+- classifier.bias
+runtime_guard:
+  warmup_micro_batches: 16
+  measure_micro_batches: 64
+  max_projected_training_seconds: 28800
+  max_peak_vram_fraction: 0.9

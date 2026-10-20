@@ -1,0 +1,83 @@
+# New experiment; K1 checkpoints/configs remain immutable.
+experiment_id: K2R320
+phase: P5
+status: prepared_not_run
+hypothesis: 320 px forward resolution preserves useful fine MRI detail beyond K1 at
+  256 px on the same canonical volumes.
+question: Does only increasing forward resolution improve fixed outer-fold weak AUC?
+control: K1
+changes:
+- forward_resolution_256_to_320
+folds: state/folds-v2-allgold.csv
+labels:
+  source: public_mean4_v0
+  file: state/soft-labels/public-mean4-v0.jsonl
+  sha256: 941766e7af92ae5581189115c97c28584a8273ad071b78f9cc1b1a154c926f2a
+cache:
+  name: k1-canonical-volumes-v1
+  img_size: 384
+  crop_mm: 153.6
+  max_slices: 64
+  storage: ragged_npz
+  slot_key: Anatomical_Plane + Fat_Suppression
+  all_series_candidates: true
+  preprocess_hash: from_manifest
+weights:
+  encoder: convnext_tiny
+  file: convnext_tiny.in12k_ft_in1k/model.safetensors
+  sha256: a1aefa409b513cf209b085424eb3efffe4e4a9f511491bc2c12ea35209e6bb95
+reader_code:
+  dataset: goodpjw2008/rsna-knee-2-5d-convnext-reader
+  file: knee.py
+  license: Apache-2.0
+  sha256: 314c2af387a5cbd1d25f192f19f4ecc6d4ae4b30403e92e9d9b3ed2c325880b1
+train:
+  model: kneenet
+  backbone: convnext_tiny
+  dim: 384
+  depth: 2
+  res: 320
+  k: 8
+  epochs: 14
+  batch: 8
+  lr: 0.0001
+  lr_head: 0.0005
+  wd: 0.02
+  ema: 0.998
+  clip: 3.0
+  seed: 2026
+decision_criterion: 'Before this run: K2R320 minus K1 on fixed weak targets >= +0.004
+  and paired bootstrap 95% lower bound > 0. Report reused-gold and class regressions;
+  confirm on fold1 only if this passes. No automatic promotion/submission.'
+outer_fold: '0'
+uid_selection: soft_targets
+eval_precision: fp32
+decision_rule:
+  split: weak_hard_labels
+  min_delta: 0.004
+  ci95_lower_gt: 0.0
+  bootstrap_seed: 2026
+  n_boot: 2000
+  require_complete_pairs: true
+  require_second_outer_fold_same_direction: true
+  max_full_fold0_runs: 1
+  gold: Repeatedly used development set; report delta/CI and every class regression,
+    not independent test.
+  promotion: No automatic submission or promotion; existing submission gates still
+    apply.
+prerequisites:
+- K1 vs K0 fold0 fixed threshold/CI passed and the positive direction repeated on
+  fold1.
+- Same pinned full-volume cache, source-specific soft targets, fold0 UID list and
+  seed/schedule.
+- One complete K2 run only; no automatic 384 px arm, weight search, promotion or submission.
+- Stop after warmup + measured 64 micro-batches if projected training exceeds 6 hours
+  or peak allocation exceeds 90% VRAM.
+cache_layout: canonical_volumes
+eval_windows: 12
+runtime_guard:
+  warmup_micro_batches: 16
+  measure_micro_batches: 64
+  max_projected_training_seconds: 21600
+  max_peak_vram_fraction: 0.9
+  kernel_timeout_seconds: 25200

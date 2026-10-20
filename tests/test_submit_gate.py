@@ -144,3 +144,13 @@ def test_cli_text_receipt_is_reconciled_from_actual_history(tmp_path):
     assert out['server_receipt'] == '98765'
     assert registry.submission_for_kernel('owner/kernel', '2')['server_receipt'] == '98765'
     assert provider.calls == 1
+
+
+def test_kneenet_needs_optimizer_steps_and_the_vetted_source(tmp_path):
+    from rsna_knee.submission.package import _checkpoint_errors
+    path = tmp_path / 'checkpoint.pt'
+    torch_save(path, {'kneenet': {'backbone': 'convnext_tiny', 'dim': 384, 'depth': 2, 'res': 256},
+                     'step': 0, 'model': {}, 'reader_code_sha256': 'unvetted'})
+    errors = _checkpoint_errors(path)
+    assert 'checkpoint_no_optimizer_step' in errors
+    assert 'checkpoint_reader_source_mismatch' in errors

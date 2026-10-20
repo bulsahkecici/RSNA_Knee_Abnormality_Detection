@@ -23,6 +23,7 @@ import ast
 import base64
 import hashlib
 import json
+import lzma
 import shutil
 import tarfile
 from pathlib import Path
@@ -36,6 +37,10 @@ WHEELS = ROOT / "artifacts/kaggle/v3-offline-asset/wheels"
 READER = "goodpjw2008/rsna-knee-2-5d-convnext-reader"  # eligible public reader (2026-10-14 check)
 READER_MODES = ("rank50", "reader_only", "route")  # route: listed findings from ours, the rest from the reader
 CODEC_PINS = {"pydicom": "3.0.1", "pylibjpeg": "2.1.0", "pylibjpeg-libjpeg": "2.4.0", "pylibjpeg-openjpeg": "2.6.0"}
+for _index in range(5):
+    _folder = ROOT / f"artifacts/kaggle/rsna-k1-vol-shard{_index}-20261015"
+    if (_folder / "output/campaign-result.json").is_file():
+        CACHE_KERNELS[json.loads((_folder / "output/campaign-result.json").read_text())["manifest_sha256"]] = _folder.name
 
 
 def _sha(data: bytes) -> str:
@@ -59,6 +64,19 @@ def preprocess_source(part_manifest_shas: list[str]) -> tuple[bytes, dict, str, 
         result = json.loads((folder / "output/campaign-result.json").read_text())
         if result["status"] != "ok" or result["manifest_sha256"] != cache_manifest_sha:
             raise SystemExit("cache kernel result does not describe the arm's cache")
+        if "POLICY" not in values:
+            manifest_path = folder / "output/cache/manifest.json"
+            raw = manifest_path.read_bytes()
+            if _sha(raw) != cache_manifest_sha:
+                raise SystemExit("canonical cache manifest file hash differs from training")
+            manifest = json.loads(raw)
+            config = manifest["preprocess_config"]
+            if config["version"] != "k1-canonical-volumes-v1":
+                raise SystemExit("unrecognized canonical cache policy")
+            policy = {k: config[k] for k in ("size", "crop_mm", "max_slices")}
+            policy.update(layout="canonical_volumes", max_cache_bytes=18 * 1024**3)
+            found.append((data, policy, manifest["preprocess_hash"], config["runtime_versions"]))
+            continue
         policy = dict(values["POLICY"], max_cache_bytes=18 * 1024**3, strict_series=True)
         versions = {name: result["packages"][name] for name in ("numpy", "Pillow", "pydicom")}
         found.append((data, policy, result["preprocess_hash"], versions))
@@ -67,10 +85,28 @@ def preprocess_source(part_manifest_shas: list[str]) -> tuple[bytes, dict, str, 
     return found[0]
 
 
+def notebook_cells(exp: str, notebook_dir: Path | None = None) -> list[str]:
+    notebook = json.loads(((notebook_dir or ROOT / "notebooks/generated") / f"{exp}.ipynb").read_text())
+    cells = []
+    for cell in notebook["cells"]:
+        text = "".join(cell["source"])
+        if cell["cell_type"] == "code" and "_payload = lzma.decompress(" in text:
+            tree = ast.parse(text)
+            node = next(n for n in tree.body if isinstance(n, ast.Assign) and
+                        isinstance(n.targets[0], ast.Name) and n.targets[0].id == "_payload")
+            raw = lzma.decompress(base64.b64decode(ast.literal_eval(node.value.args[0].args[0])))
+            check = next(n for n in tree.body if isinstance(n, ast.Assert))
+            assert _sha(raw) == ast.literal_eval(check.test.comparators[0]), "packed notebook hash mismatch"
+            text = raw.decode()
+        cells.append(text)
+    return cells
+
+
 def notebook_blob(exp: str, name: str) -> bytes:
-    notebook = json.loads((ROOT / "notebooks/generated" / f"{exp}.ipynb").read_text())
-    cell = next("".join(c["source"]) for c in notebook["cells"] if f"{name} = " in "".join(c["source"]))
-    return base64.b64decode(ast.literal_eval(cell.split(f"{name} = ", 1)[1].split("\n", 1)[0]))
+    for cell in notebook_cells(exp):
+        if f"{name} = " in cell:
+            return base64.b64decode(_assigned(cell, {name})[name])
+    raise ValueError(f"notebook {exp} has no {name}")
 
 
 def training_source(exp: str, build: dict) -> bytes:
@@ -115,7 +151,7 @@ def _member(exp: str, parity_dir: Path | None) -> dict:
     return {"exp": exp, "checkpoint": checkpoint, "checkpoint_sha256": checkpoint_sha, "model": model,
             "parity": parity, "cache": ran["cache_manifest_sha256"], "parts": parts, "git_commit": ran["git_commit"],
             "gold": review["splits"]["gold_all"]["macro_auc"], "kind": "kneenet" if kneenet else "study",
-            "knee": knee, "parity_reference": reference}
+            "knee": knee, "parity_reference": reference, "eval_windows": int(ran.get("eval_windows", 12))}
 
 
 def build(exps: list[str], slug: str, parity_dir: Path | None = None, reader_eval: Path | None = None,
@@ -171,10 +207,12 @@ def build(exps: list[str], slug: str, parity_dir: Path | None = None, reader_eva
                 "members": [{"experiment": m["exp"], "checkpoint_sha256": m["checkpoint_sha256"],
                              "training_source_sha256": _sha(m["model"]), "git_commit": m["git_commit"],
                              "gold_all_macro_auc": m["gold"], "kind": m["kind"],
-                             "parity_reference": m["parity_reference"]} for m in members],
+                             "parity_reference": m["parity_reference"], "eval_windows": m["eval_windows"]} for m in members],
                 "preprocess_source_sha256": _sha(pre), "preprocess_hash": preprocess_hash, "policy": policy,
                 "training_pixel_versions": pixel_versions, "cache_manifest_sha256": members[0]["cache"],
-                "img_size": int(policy["size"]), "codec_pins": CODEC_PINS, "reader": reader}
+                "img_size": int(policy["size"]), "codec_pins": dict(CODEC_PINS), "reader": reader}
+    if policy.get("layout") == "canonical_volumes":
+        identity["codec_pins"]["opencv-python-headless"] = pixel_versions["opencv-python-headless"]
     (staged / "MANIFEST.json").write_text(json.dumps({"internet_required": False, "identity": identity, "files": files},
                                                      indent=2))
     upload = asset / "upload"
@@ -230,18 +268,31 @@ from rsna_knee.data.preprocess import preprocess_hash
 if __name__ == "__main__":  # cache workers may re-import this module
     spec = json.load(open(sys.argv[1]))
     p = spec["policy"]
-    m = cache_build.build_cache(series_csv=Path(spec["series_csv"]), dicom_root=Path(spec["dicom_root"]),
-        dest=Path(spec["dest"]), study_ids=spec["study_ids"], size=p["size"], n_centers=p["n_centers"],
-        crop_mm=p.get("crop_mm", 160.0), intensity=p.get("intensity", "slice"),  # the cache kernels' defaults
-        center_lower=p["center_lower"], center_upper=p["center_upper"], slots=getattr(cache_build, p["slots"]),
-        strict_series=spec["strict"], resume=True, max_cache_bytes=p["max_cache_bytes"], workers=spec["workers"],
-        progress_every=100, index_flush_every=100)
-    config = m["preprocess_config"]
-    print(json.dumps({"n_studies": m["n_studies"], "n_quarantine": m["n_quarantine"],
-                      "preprocess_hash": m["preprocess_hash"], "quarantine": m["quarantine"],
-                      "pixel_runtime_versions": config["pixel_runtime_versions"],
-                      "hash_with_training_versions": preprocess_hash(
-                          dict(config, pixel_runtime_versions=spec["training_versions"]))}), flush=True)
+    if p.get("layout") == "canonical_volumes":
+        from rsna_knee.data.volume_cache import build_volume_cache
+        from rsna_knee.hashing import sha256_json
+        m = build_volume_cache(series_csv=Path(spec["series_csv"]), dicom_root=Path(spec["dicom_root"]),
+            dest=Path(spec["dest"]), study_ids=spec["study_ids"], size=p["size"], crop_mm=p["crop_mm"],
+            max_slices=p["max_slices"], max_cache_bytes=p["max_cache_bytes"])
+        config = m["preprocess_config"]
+        print(json.dumps({"n_studies": len(m["studies"]), "n_quarantine": len(m["quarantine"]),
+                          "preprocess_hash": m["preprocess_hash"], "quarantine": m["quarantine"],
+                          "pixel_runtime_versions": config["runtime_versions"],
+                          "hash_with_training_versions": sha256_json(
+                              dict(config, runtime_versions=spec["training_versions"]))}), flush=True)
+    else:
+        m = cache_build.build_cache(series_csv=Path(spec["series_csv"]), dicom_root=Path(spec["dicom_root"]),
+            dest=Path(spec["dest"]), study_ids=spec["study_ids"], size=p["size"], n_centers=p["n_centers"],
+            crop_mm=p.get("crop_mm", 160.0), intensity=p.get("intensity", "slice"),  # the cache kernels' defaults
+            center_lower=p["center_lower"], center_upper=p["center_upper"], slots=getattr(cache_build, p["slots"]),
+            strict_series=spec["strict"], resume=True, max_cache_bytes=p["max_cache_bytes"], workers=spec["workers"],
+            progress_every=100, index_flush_every=100)
+        config = m["preprocess_config"]
+        print(json.dumps({"n_studies": m["n_studies"], "n_quarantine": m["n_quarantine"],
+                          "preprocess_hash": m["preprocess_hash"], "quarantine": m["quarantine"],
+                          "pixel_runtime_versions": config["pixel_runtime_versions"],
+                          "hash_with_training_versions": preprocess_hash(
+                              dict(config, pixel_runtime_versions=spec["training_versions"]))}), flush=True)
 """
 
 PREDICT = """
@@ -281,6 +332,9 @@ torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = False 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ck = torch.load(spec["checkpoint"], map_location="cpu", weights_only=False)
 cfg = ck["kneenet"]
+if ck.get("input_normalization"):
+    knee.MEAN = tuple(ck["input_normalization"]["mean"])
+    knee.STD = tuple(ck["input_normalization"]["std"])
 model = knee.KneeNet(cfg["backbone"], pretrained=False, dim=int(cfg["dim"]), depth=int(cfg["depth"]))
 model.load_state_dict(ck["model"])
 model = model.to(device).to(memory_format=torch.channels_last).eval()
@@ -288,23 +342,34 @@ done = {}
 for manifest_path in spec["manifests"]:
     manifest = json.load(open(manifest_path))
     policy = manifest["preprocess_config"]
-    slot_map = [knee.slot_of(plane, kind == "fluid") for plane, kind in policy["slots"]]
-    n_c = int(policy["n_centers"])
-    positions = np.linspace(float(policy["center_lower"]), float(policy["center_upper"]), n_c).astype(np.float32)
-    for uid in [u for u in spec["study_ids"] if u in manifest["studies"] and u not in done]:
-        meta = manifest["studies"][uid]
-        vol = load_volume(uid, meta, Path(manifest_path).parent)
-        present = meta.get("slot_mask") or [1] * vol.shape[0]
-        # as the notebook's evaluation: every cached window of every present slot, in the reader's slot layout
-        x = np.zeros((knee.N_SLOTS, n_c) + vol.shape[2:], np.uint8)
-        mask, pos = np.zeros(knee.N_SLOTS, bool), np.zeros((knee.N_SLOTS, n_c), np.float32)
-        for s in range(vol.shape[0]):
-            if present[s]:
-                t = slot_map[s]
-                x[t], mask[t], pos[t] = vol[s], True, positions
+    if policy.get("version") == "k1-canonical-volumes-v1":
+        from rsna_knee.data.volume_dataset import VolumeStudy
+        uids = [u for u in spec["study_ids"] if u in manifest["studies"] and u not in done]
+        ds = VolumeStudy(uids, spec["eval_windows"], False, studies=manifest["studies"],
+                         cache=Path(manifest_path).parent, size=policy["size"], targets={})
         with torch.no_grad():
-            p = model(*(torch.from_numpy(a)[None].to(device) for a in (x, mask, pos)), res=int(cfg["res"]))
-        done[uid] = dict(zip(TARGET_COLUMNS, map(float, p.float().sigmoid()[0].cpu().numpy()), strict=True))
+            for x, mask, pos, _, _, ids in torch.utils.data.DataLoader(ds, batch_size=2):
+                p = model(*(a.to(device) for a in (x, mask, pos)), res=int(cfg["res"]))
+                for uid, prob in zip(ids, p.float().sigmoid().cpu().numpy(), strict=True):
+                    done[uid] = dict(zip(TARGET_COLUMNS, map(float, prob), strict=True))
+    else:
+        slot_map = [knee.slot_of(plane, kind == "fluid") for plane, kind in policy["slots"]]
+        n_c = int(policy["n_centers"])
+        positions = np.linspace(float(policy["center_lower"]), float(policy["center_upper"]), n_c).astype(np.float32)
+        for uid in [u for u in spec["study_ids"] if u in manifest["studies"] and u not in done]:
+            meta = manifest["studies"][uid]
+            vol = load_volume(uid, meta, Path(manifest_path).parent)
+            present = meta.get("slot_mask") or [1] * vol.shape[0]
+            # as the notebook's evaluation: every cached window of every present slot, in the reader's slot layout
+            x = np.zeros((knee.N_SLOTS, n_c) + vol.shape[2:], np.uint8)
+            mask, pos = np.zeros(knee.N_SLOTS, bool), np.zeros((knee.N_SLOTS, n_c), np.float32)
+            for s in range(vol.shape[0]):
+                if present[s]:
+                    t = slot_map[s]
+                    x[t], mask[t], pos[t] = vol[s], True, positions
+            with torch.no_grad():
+                p = model(*(torch.from_numpy(a)[None].to(device) for a in (x, mask, pos)), res=int(cfg["res"]))
+            done[uid] = dict(zip(TARGET_COLUMNS, map(float, p.float().sigmoid()[0].cpu().numpy()), strict=True))
 with open(spec["out"], "w") as handle:
     for uid, prob in done.items():
         handle.write(json.dumps({"StudyInstanceUID": uid, **prob}) + "\\n")
@@ -416,7 +481,7 @@ def predict(manifests, uids, out, member, deps, asset):
     spec = {"manifests": [str(m) for m in manifests], "study_ids": uids, "out": str(out),
             "checkpoint": str(asset / "members" / member["experiment"] / "checkpoint.pt"), "img_size": IDENTITY["img_size"]}
     if member.get("kind") == "kneenet":
-        return run(PREDICT_KNEENET, dict(spec, knee_dir=str(asset / "members" / member["experiment"])), src, deps,
+        return run(PREDICT_KNEENET, dict(spec, knee_dir=str(asset / "members" / member["experiment"]), eval_windows=member["eval_windows"]), src, deps,
                    "predict-" + out.stem)
     return run(PREDICT, spec, src, deps, "predict-" + out.stem)
 
@@ -527,27 +592,51 @@ def main():
             assert result["reader_parity"]["max_abs"] <= PARITY_MAX_ABS and \
                 result["reader_parity"]["mean_abs"] <= PARITY_MEAN_ABS, "reader does not reproduce its vetted gold predictions"
 
+    if os.environ.get("RSNA_KEEP_TMP") != "1":
+        shutil.rmtree(TMP / "parity-cache", ignore_errors=True)
+
     with (comp / "test.csv").open(newline="") as handle:
         studies = [row["StudyInstanceUID"] for row in csv.DictReader(handle)]
     assert studies and len(set(studies)) == len(studies), "test.csv study list is empty or duplicated"
     with (comp / "sample_submission.csv").open(newline="") as handle:
         columns = next(csv.reader(handle))
     t0 = time.time()
-    strict = preprocess(comp / "test_series.csv", comp / "test_series", studies, TMP / "test-cache", True,
-                        pre_src, deps, workers, "preprocess-test")
-    same_versions = check_policy(strict, "test")
-    # The competition rerun uses the image of the version that passed parity; elsewhere parity is required.
-    assert same_versions or RERUN or "parity" in result, "pixel runtime differs from training and parity did not run"
-    manifests = [TMP / "test-cache/manifest.json"]
-    built = set(json.loads(manifests[0].read_text())["studies"])
-    retry = [u for u in studies if u not in built]
-    relaxed = None
-    if retry:  # strict decoding quarantined these; never zero-fill, try once with tolerant series decoding
-        relaxed = preprocess(comp / "test_series.csv", comp / "test_series", retry, TMP / "test-cache-relaxed", False,
-                             pre_src, deps, workers, "preprocess-test-relaxed")
-        manifests.append(TMP / "test-cache-relaxed/manifest.json")
-    preprocess_seconds = time.time() - t0
-    probs, _, model_targets, device = predict_all(manifests, studies, "test", deps, asset)
+    if IDENTITY["policy"].get("layout") == "canonical_volumes":
+        probs, built, quarantine, preprocess_seconds = {}, set(), {}, 0.0
+        for offset in range(0, len(studies), 32):
+            chunk = studies[offset:offset + 32]
+            cache_dir = TMP / "test-cache"
+            begin = time.time()
+            strict = preprocess(comp / "test_series.csv", comp / "test_series", chunk, cache_dir, True,
+                                pre_src, deps, workers, "preprocess-test")
+            same_versions = check_policy(strict, "test")
+            assert same_versions or RERUN or "parity" in result, "pixel versions differ without parity"
+            preprocess_seconds += time.time() - begin
+            got, _, model_targets, device = predict_all([cache_dir / "manifest.json"], chunk, "test", deps, asset)
+            probs.update(got)
+            built.update(got)
+            quarantine.update(strict["quarantine"])
+            print("test progress", offset + len(chunk), "/", len(studies), flush=True)
+            if len(studies) > 32 or os.environ.get("RSNA_KEEP_TMP") != "1":
+                shutil.rmtree(cache_dir)
+        strict = {"quarantine": quarantine}
+        relaxed = None
+    else:
+        strict = preprocess(comp / "test_series.csv", comp / "test_series", studies, TMP / "test-cache", True,
+                            pre_src, deps, workers, "preprocess-test")
+        same_versions = check_policy(strict, "test")
+        # The competition rerun uses the image of the version that passed parity; elsewhere parity is required.
+        assert same_versions or RERUN or "parity" in result, "pixel runtime differs from training and parity did not run"
+        manifests = [TMP / "test-cache/manifest.json"]
+        built = set(json.loads(manifests[0].read_text())["studies"])
+        retry = [u for u in studies if u not in built]
+        relaxed = None
+        if retry:  # strict decoding quarantined these; never zero-fill, try once with tolerant series decoding
+            relaxed = preprocess(comp / "test_series.csv", comp / "test_series", retry, TMP / "test-cache-relaxed", False,
+                                 pre_src, deps, workers, "preprocess-test-relaxed")
+            manifests.append(TMP / "test-cache-relaxed/manifest.json")
+        preprocess_seconds = time.time() - t0
+        probs, _, model_targets, device = predict_all(manifests, studies, "test", deps, asset)
     targets = columns[1:]
     assert targets == model_targets, "submission columns differ from the model's targets"
     missing = [u for u in studies if u not in probs]

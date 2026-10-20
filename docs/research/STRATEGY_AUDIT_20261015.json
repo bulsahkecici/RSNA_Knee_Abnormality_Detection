@@ -1,0 +1,99 @@
+{
+  "reader_gold_auc": 0.9105330939345023,
+  "K5ALLS2": {
+    "bf16_auc": 0.8949963311361241,
+    "fp32_auc": 0.8952251747227419,
+    "fp32_per_class": {
+      "ACL": 0.9681372549019608,
+      "MCL": 0.9682539682539683,
+      "Medial Meniscus": 0.9399038461538461,
+      "Lateral Meniscus": 0.8571428571428571,
+      "Medial OA": 0.9736434108527132,
+      "Lateral OA": 0.8259187620889749,
+      "PF OA": 0.8661518661518661,
+      "Effusion": 0.9540372670807453,
+      "Synovitis": 0.6236559139784947,
+      "Baker's": 0.9583333333333333,
+      "Contusion": 0.9325236167341431,
+      "Fracture": 0.875
+    },
+    "fp32_minus_reader": {
+      "delta": -0.01531,
+      "ci95": [
+        -0.03139,
+        -0.00032
+      ],
+      "n_boot": 2000
+    },
+    "prob_abs_delta_max": 0.06501644849777222,
+    "prob_abs_delta_mean": 0.005289450004140194
+  },
+  "K5ALLS3": {
+    "bf16_auc": 0.8978125759094975,
+    "fp32_auc": 0.8979169304369922,
+    "fp32_per_class": {
+      "ACL": 0.9865196078431372,
+      "MCL": 0.9319727891156462,
+      "Medial Meniscus": 0.9387019230769231,
+      "Lateral Meniscus": 0.8596273291925465,
+      "Medial OA": 0.9813953488372092,
+      "Lateral OA": 0.839458413926499,
+      "PF OA": 0.87001287001287,
+      "Effusion": 0.9192546583850932,
+      "Synovitis": 0.6798088410991637,
+      "Baker's": 0.9565217391304348,
+      "Contusion": 0.9311740890688258,
+      "Fracture": 0.8805555555555555
+    },
+    "fp32_minus_reader": {
+      "delta": -0.01262,
+      "ci95": [
+        -0.03367,
+        0.00911
+      ],
+      "n_boot": 2000
+    },
+    "prob_abs_delta_max": 0.06212005019187927,
+    "prob_abs_delta_mean": 0.004681649619188888
+  },
+  "soft_training_pool": {
+    "fold_non_gold_eligible": 4348,
+    "available_soft": 4348,
+    "K5ALL_trained": 4160,
+    "available_but_untrained": 188,
+    "untrained_with_all_12_soft_targets": 188,
+    "gold_training_overlap": 0
+  },
+  "series_metadata": {
+    "studies": 4407,
+    "series": 24371,
+    "studies_with_alternative_series_in_a_slot": 1936,
+    "axial_non_fat_suppressed_studies": 857
+  },
+  "reader_source_hashes": {
+    "train.py": "e41b26488ea5516c113f473c35f2391e0e97dc693b53d076f81b8953f169db2b",
+    "preprocess.py": "68601ad84ec3a0f030b5c2d37cc0d657cd3e12b17f7130e7385fba9648d324b6",
+    "infer.py": "39d4517cc33c4bb1e4a03cfb49a0673a8789055de8c3cc0957c6e3035f6be4af"
+  },
+  "kind": "retrospective_local_audit_not_leaderboard",
+  "date": "2026-10-15",
+  "v5_pilot_positions": {
+    "manifest": "artifacts/kaggle/rsna-policy-pilot-hires-20261009/output/pilot/mid5-256-154mm-series/cache/manifest.json",
+    "n_studies": 64,
+    "n_present_windows": 3444,
+    "mean_abs_normalized_position_error": 0.00895054977788434,
+    "max_abs_normalized_position_error": 0.030519480519480502
+  },
+  "kaggle_api_readonly_20261015": {
+    "leaderboard_top": 0.967,
+    "submission_scores": {
+      "57178710": 0.929,
+      "57184259": 0.927,
+      "57184253": 0.926,
+      "57143034": 0.862
+    },
+    "final_deadline_UTC": "2026-10-22T23:59:00Z",
+    "team_deadline_UTC": "2026-10-15T23:59:00Z",
+    "current_own_rank": null
+  }
+}

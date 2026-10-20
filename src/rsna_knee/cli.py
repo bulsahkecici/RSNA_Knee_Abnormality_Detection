@@ -207,6 +207,34 @@ def cache_build(
     _print(prepared)
 
 
+@cache_app.command("volume-build")
+def cache_volume_build(
+    series_csv: Path = typer.Option(..., "--series-csv"),
+    dicom_root: Path = typer.Option(..., "--dicom-root"),
+    dest: Path = typer.Option(..., "--dest"),
+    uid_file: Path | None = typer.Option(None, "--uid-file"),
+    limit: int | None = typer.Option(64, "--limit", min=1),
+    size: int = typer.Option(384, "--size", min=4),
+    max_cache_gib: float = typer.Option(18., "--max-cache-gib", min=.001),
+    resume: bool = typer.Option(True, "--resume/--no-resume"),
+) -> None:
+    """K1 real DICOM header/decode pilot; run against mounted data on a remote worker."""
+    from rsna_knee.data.cache_build import _read_series_csv
+    from rsna_knee.data.volume_cache import build_volume_cache, volume_manifest_ready
+    uids = sorted(_read_series_csv(series_csv)) if uid_file is None else sorted(set(uid_file.read_text().splitlines()))
+    if limit is not None:
+        import numpy as np
+        uids = sorted(np.random.default_rng(2026).permutation(uids)[:limit].tolist())
+    manifest = build_volume_cache(series_csv=series_csv, dicom_root=dicom_root, dest=dest,
+                                  study_ids=uids, size=size, resume=resume,
+                                  max_cache_bytes=int(max_cache_gib * 1024**3))
+    ready, reason = volume_manifest_ready(dest / 'manifest.json', required_uids=uids)
+    _print({'verified': ready, 'reason': reason, 'n_studies': len(manifest['studies']),
+            'n_quarantine': len(manifest['quarantine']), 'manifest': str(dest / 'manifest.json')})
+    if not ready:
+        raise typer.Exit(1)
+
+
 @runtime_app.command("capabilities")
 def runtime_capabilities() -> None:
     _print(

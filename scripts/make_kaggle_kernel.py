@@ -3,7 +3,8 @@
 Replaces the earlier pattern of string-patching previous entry.py payloads.
 The archive is a deterministic tar.gz of ``src/rsna_knee`` read from a git ref
 (default HEAD; sorted, mtime 0), so the same commit always yields the same
-SOURCE_SHA256 and uncommitted edits by concurrent work are never packaged. Templates live
+SOURCE_SHA256. Uncommitted edits are excluded unless ``--ref WORKTREE`` explicitly
+requests a frozen working-tree snapshot, marked separately in build provenance. Templates live
 in ``scripts/kaggle_entries/`` and must define ``SOURCE_B64 = ""``,
 ``SOURCE_SHA256 = ""`` and ``BUILD_INFO = {}`` exactly once.
 
@@ -33,19 +34,25 @@ def _git(*args: str) -> bytes:
 
 
 def source_archive(ref: str, extra: tuple[str, ...] = ()) -> tuple[bytes, list[str]]:
-    """Archive ``src/rsna_knee`` (plus ``extra`` committed paths) as of ``ref``; uncommitted edits never leak in.
+    """Archive source at a git ref, or explicitly freeze current bytes with ``WORKTREE``.
 
     Code that locates the repository root from the working directory (configs, weight
     allowlist) needs ``extra=("configs", "pyproject.toml")`` and a chdir into the archive.
     """
-    names = sorted(n for n in _git("ls-tree", "-r", "--name-only", ref, "--", "src/rsna_knee").decode().splitlines()
+    if ref == 'WORKTREE':
+        names = sorted(str(p.relative_to(ROOT)) for p in (ROOT / 'src/rsna_knee').rglob('*.py'))
+        for item in extra:
+            path = ROOT / item
+            names.extend([item] if path.is_file() else sorted(str(p.relative_to(ROOT)) for p in path.rglob('*') if p.is_file()))
+    else:
+        names = sorted(n for n in _git("ls-tree", "-r", "--name-only", ref, "--", "src/rsna_knee").decode().splitlines()
                    if n.endswith(".py"))
-    if extra:
+    if extra and ref != 'WORKTREE':
         names += sorted(_git("ls-tree", "-r", "--name-only", ref, "--", *extra).decode().splitlines())
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz", format=tarfile.PAX_FORMAT) as archive:
         for name in names:
-            data = _git("show", f"{ref}:{name}")
+            data = (ROOT / name).read_bytes() if ref == 'WORKTREE' else _git("show", f"{ref}:{name}")
             info = tarfile.TarInfo(name)
             info.size, info.mtime, info.mode = len(data), 0, 0o644
             archive.addfile(info, io.BytesIO(data))
@@ -57,8 +64,8 @@ def source_archive(ref: str, extra: tuple[str, ...] = ()) -> tuple[bytes, list[s
 
 def git_identity(ref: str) -> dict:
     dirty = _git("status", "--porcelain", "--", "src/rsna_knee", "scripts/kaggle_entries").decode().strip()
-    return {"git_ref": ref, "git_commit": _git("rev-parse", ref).decode().strip(),
-            "worktree_dirty_ignored": bool(dirty)}
+    return {"git_ref": ref, "git_commit": _git("rev-parse", 'HEAD' if ref == 'WORKTREE' else ref).decode().strip(),
+            "worktree_dirty_ignored": bool(dirty) and ref != 'WORKTREE', 'source_is_worktree': ref == 'WORKTREE'}
 
 
 def apply_defines(template: str, defines: dict[str, object]) -> str:
@@ -74,7 +81,8 @@ def apply_defines(template: str, defines: dict[str, object]) -> str:
 
 def generate(entry: str, slug: str, *, internet: bool, gpu: bool, ref: str = "HEAD",
              defines: dict[str, object] | None = None) -> Path:
-    template = _git("show", f"{ref}:scripts/kaggle_entries/{entry}.py").decode()
+    template = ((ROOT / f'scripts/kaggle_entries/{entry}.py').read_text() if ref == 'WORKTREE'
+                else _git("show", f"{ref}:scripts/kaggle_entries/{entry}.py").decode())
     for marker in MARKERS:
         if template.count(marker) != 1:
             raise SystemExit(f"template must contain {marker!r} exactly once")

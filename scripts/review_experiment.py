@@ -108,10 +108,14 @@ def commit_drift(ran: str, built: str) -> dict | None:
     return {"ran": ran, "built": built, "changed": changed, "result_cells_identical": True}
 
 
-def verify(exp: str, folder: Path) -> tuple[dict, dict | None]:
-    build = json.loads((ROOT / "notebooks/generated" / f"{exp}.build.json").read_text())
+def verify(exp: str, folder: Path, *, build_dir: Path | None = None) -> tuple[dict, dict | None]:
+    build_dir = Path(build_dir) if build_dir is not None else ROOT / "notebooks/generated"
+    build = json.loads((build_dir / f"{exp}.build.json").read_text())
     ran = json.loads((folder / "experiment.json").read_text())
     mismatched = [k for k in PINNED if build.get(k) != ran.get(k)]
+    mismatched += [k for k in ('training_cell_sha256', 'generator_sha256', 'platform_recipe_sha256',
+                              'platform_generator_sha256', 'input_normalization', 'pretrained_classifier_keys')
+                   if k in build and build[k] != ran.get(k)]
     if mismatched:
         raise ValueError(f"result was not produced by the generated notebook: {mismatched}")
     drift = commit_drift(ran["git_commit"], build["git_commit"])
@@ -137,22 +141,25 @@ def score(preds: dict, labels: dict, uids: list[str]) -> tuple[float | None, dic
     return value, detail, y, p
 
 
-def paired_delta(y, p_new, p_old, seed=2026) -> dict:
+def paired_delta(y, p_new, p_old, seed=2026, n_boot=None) -> dict:
     rng = np.random.default_rng(seed)
-    base = (macro(y, p_new)[0] or np.nan) - (macro(y, p_old)[0] or np.nan)
+    new_auc, old_auc = macro(y, p_new)[0], macro(y, p_old)[0]
+    base = float('nan') if new_auc is None or old_auc is None else new_auc - old_auc
     deltas = []
-    for _ in range(N_BOOT):
+    for _ in range(N_BOOT if n_boot is None else n_boot):
         idx = rng.integers(0, len(y), len(y))
         a, b = macro(y[idx], p_new[idx])[0], macro(y[idx], p_old[idx])[0]
         if a is not None and b is not None:
             deltas.append(a - b)
     lo, hi = np.percentile(deltas, [2.5, 97.5]) if deltas else (np.nan, np.nan)
-    return {"delta": round(float(base), 5), "ci95": [round(float(lo), 5), round(float(hi), 5)], "n_boot": len(deltas)}
+    return {"delta": round(float(base), 5), "ci95": [round(float(lo), 5), round(float(hi), 5)], "n_boot": len(deltas),
+            'delta_unrounded': float(base), 'ci95_unrounded': [float(lo), float(hi)]}
 
 
-def review(exp: str) -> dict:
+def review(exp: str, *, build_dir: Path | None = None) -> dict:
+    build_dir = Path(build_dir) if build_dir is not None else ROOT / "notebooks/generated"
     folder = out_dir(exp)
-    metrics, drift = verify(exp, folder)
+    metrics, drift = verify(exp, folder, build_dir=build_dir)
     preds, labels = load_predictions(folder), labels_table()
     folds = load_folds(FOLDS)
     gold_sets = {"gold_all": [r["StudyInstanceUID"] for r in folds if r.get("gold_set")]}
@@ -180,13 +187,32 @@ def review(exp: str) -> dict:
                                                            "skipped_updates", "attempted_updates", "config_id",
                                                            "init_source", "label_source")}
     config = next((ROOT / "configs/experiments").glob(f"P*-{exp}-*.yaml"), None)
-    control = yaml.safe_load(config.read_text()).get("control") if config else None
+    spec = yaml.safe_load(config.read_text()) if config else {}
+    control = spec.get("control")
+    rule = spec.get('decision_rule')
+    if rule:
+        # Evaluate the new arms on their pinned fp32 predictions and complete outer fold.
+        build = json.loads((build_dir / f'{exp}.build.json').read_text())
+        if build.get('eval_precision') != 'fp32':
+            raise ValueError('K0/K1 decisions require fp32 predictions')
+        if metrics.get('eval_precision') != 'fp32':
+            raise ValueError('runtime did not record fp32 evaluation')
+        if hashlib.sha256(LABELS.read_bytes()).hexdigest() != build['labels_sha256']:
+            raise ValueError('fixed numeric evaluation targets changed')
+        expected_weak = {r['StudyInstanceUID'] for r in folds
+                         if r['fold'] == str(build['outer_fold']) and not r.get('gold_set')}
+        if {u for u, (s, _) in preds.items() if s == 'weak'} != expected_weak:
+            raise ValueError('incomplete outer-fold predictions')
+        report['decision'] = {'status': 'pending_control', 'rule': rule,
+                              'second_fold_confirmation': 'required; not inferred from this run'}
     if control and (out_dir(control) / "review.json").is_file():
         old = load_predictions(out_dir(control))
         report["vs_control"] = {"control": control}
         for name in ("gold_all", "gold_A_historic_eval", "gold_B_former_train", "weak_hard_labels"):
             uids, y = arrays[name]
             keep = [i for i, u in enumerate(uids) if u in old]  # arms on different caches cover different weak studies
+            if rule and name == 'weak_hard_labels' and rule.get('require_complete_pairs') and len(keep) != len(uids):
+                raise ValueError('K0/K1 control lacks complete weak pairs')
             if name != "weak_hard_labels" and len(keep) != len(uids):
                 raise ValueError(f"control {control} lacks predictions for {name}")
             if not keep:  # a control on another outer fold holds out different weak studies
@@ -194,7 +220,23 @@ def review(exp: str) -> dict:
                 continue
             p_new = np.stack([preds[uids[i]][1] for i in keep])
             p_old = np.stack([old[uids[i]][1] for i in keep])
-            report["vs_control"][name] = paired_delta(y[keep], p_new, p_old) | {"n_paired": len(keep)}
+            bootstrap_options = {} if not rule else {'seed': int(rule['bootstrap_seed']), 'n_boot': int(rule['n_boot'])}
+            report["vs_control"][name] = paired_delta(y[keep], p_new, p_old, **bootstrap_options) | {"n_paired": len(keep)}
+            if rule:
+                _, new_detail = macro(y[keep], p_new)
+                _, old_detail = macro(y[keep], p_old)
+                report['vs_control'][name]['per_class_delta'] = {
+                    t: None if new_detail['per_class'][t]['auc'] is None or old_detail['per_class'][t]['auc'] is None
+                    else new_detail['per_class'][t]['auc'] - old_detail['per_class'][t]['auc'] for t in TARGET_COLUMNS}
+        if rule:
+            old_build = json.loads((ROOT / 'notebooks/generated' / f'{control}.build.json').read_text())
+            if old_build.get('eval_precision') != 'fp32' or old_build['labels_sha256'] != build['labels_sha256']:
+                raise ValueError('control precision or fixed numerical targets differ')
+            delta = report['vs_control'][rule['split']]
+            supported = (delta.get('n_paired', 0) > 0 and delta['delta_unrounded'] >= rule['min_delta']
+                         and delta['ci95_unrounded'][0] > rule['ci95_lower_gt'])
+            report['decision']['status'] = 'passes_this_fold_only' if supported else 'not_supported'
+            report['decision']['automatic_promotion'] = False
     (folder / "review.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 
@@ -203,10 +245,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("experiment")
     parser.add_argument("--zip", type=Path)
+    parser.add_argument("--build-dir", type=Path, help="Exact generated platform build records; default notebooks/generated")
     args = parser.parse_args()
     if args.zip:
         ingest(args.experiment, args.zip)
-    report = review(args.experiment)
+    report = review(args.experiment, build_dir=args.build_dir)
     summary = {k: v["macro_auc"] for k, v in report["splits"].items()}
     print(json.dumps({"experiment": args.experiment, "macro_auc": summary, "vs_control": report.get("vs_control"),
                       "timing": report["timing"]}, indent=1))

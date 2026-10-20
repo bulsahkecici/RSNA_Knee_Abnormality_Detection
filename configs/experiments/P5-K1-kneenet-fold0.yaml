@@ -1,0 +1,71 @@
+# Prepared only; no training result or promotion.
+experiment_id: K1
+phase: P5
+status: prepared_not_run
+hypothesis: Canonical geometry and full-series sampling improve KneeNet at the same
+  256 px forward resolution.
+question: Matched label/schedule/seed control; no result is claimed.
+control: K0
+changes:
+- canonical_full_series_representation
+folds: state/folds-v2-allgold.csv
+labels:
+  source: public_mean4_v0
+  file: state/soft-labels/public-mean4-v0.jsonl
+  sha256: 941766e7af92ae5581189115c97c28584a8273ad071b78f9cc1b1a154c926f2a
+cache:
+  name: k1-canonical-volumes-v1
+  img_size: 384
+  crop_mm: 153.6
+  max_slices: 64
+  storage: ragged_npz
+  slot_key: Anatomical_Plane + Fat_Suppression
+  all_series_candidates: true
+  preprocess_hash: from_manifest
+weights:
+  encoder: convnext_tiny
+  file: convnext_tiny.in12k_ft_in1k/model.safetensors
+  sha256: a1aefa409b513cf209b085424eb3efffe4e4a9f511491bc2c12ea35209e6bb95
+reader_code:
+  dataset: goodpjw2008/rsna-knee-2-5d-convnext-reader
+  file: knee.py
+  license: Apache-2.0
+  sha256: 314c2af387a5cbd1d25f192f19f4ecc6d4ae4b30403e92e9d9b3ed2c325880b1
+train:
+  model: kneenet
+  backbone: convnext_tiny
+  dim: 384
+  depth: 2
+  res: 256
+  k: 8
+  epochs: 14
+  batch: 8
+  lr: 0.0001
+  lr_head: 0.0005
+  wd: 0.02
+  ema: 0.998
+  clip: 3.0
+  seed: 2026
+decision_criterion: 'Fixed before runs: weak macro AUC delta >= +0.004 and paired
+  bootstrap 95% lower bound > 0; report gold/class regressions and confirm direction
+  on a second outer fold.'
+outer_fold: '0'
+uid_selection: soft_targets
+eval_precision: fp32
+decision_rule:
+  split: weak_hard_labels
+  min_delta: 0.004
+  ci95_lower_gt: 0.0
+  bootstrap_seed: 2026
+  n_boot: 2000
+  require_complete_pairs: true
+  require_second_outer_fold_same_direction: true
+  max_full_fold0_runs: 3
+  gold: Repeatedly used development set; report delta/CI and every class regression,
+    not independent test.
+  promotion: No automatic submission or promotion; existing submission gates still
+    apply.
+prerequisites:
+- Remote real-DICOM pilot and complete cache coverage must pass.
+cache_layout: canonical_volumes
+eval_windows: 12

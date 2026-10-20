@@ -1,0 +1,63 @@
+# Prepared only; no training result or promotion.
+experiment_id: K0F1
+phase: P5
+status: prepared_not_run
+hypothesis: Coverage control with fixed soft targets and fp32 evaluation.
+question: Matched label/schedule/seed control; no result is claimed.
+control: null
+changes:
+- training_pool
+folds: state/folds-v2-allgold.csv
+labels:
+  source: public_mean4_v0
+  file: state/soft-labels/public-mean4-v0.jsonl
+  sha256: 941766e7af92ae5581189115c97c28584a8273ad071b78f9cc1b1a154c926f2a
+cache:
+  name: v5-five256-series-window
+  storage: npz
+  shards:
+  - bulsahkecici/rsna-v5-five256-shard0-20261010
+  - bulsahkecici/rsna-v5-five256-shard1-20261010
+  slots:
+  - Sagittal:fluid
+  - Coronal:fluid
+  - Axial:fluid
+  - Sagittal:structural
+  - Coronal:structural
+  centers: 12
+  img_size: 256
+  crop_mm: 154
+  intensity: series
+  preprocess_hash: from_manifest
+weights:
+  encoder: convnext_tiny
+  file: convnext_tiny.in12k_ft_in1k/model.safetensors
+  sha256: a1aefa409b513cf209b085424eb3efffe4e4a9f511491bc2c12ea35209e6bb95
+reader_code:
+  dataset: goodpjw2008/rsna-knee-2-5d-convnext-reader
+  file: knee.py
+  license: Apache-2.0
+  sha256: 314c2af387a5cbd1d25f192f19f4ecc6d4ae4b30403e92e9d9b3ed2c325880b1
+train:
+  model: kneenet
+  backbone: convnext_tiny
+  dim: 384
+  depth: 2
+  res: 256
+  k: 8
+  epochs: 14
+  batch: 8
+  lr: 0.0001
+  lr_head: 0.0005
+  wd: 0.02
+  ema: 0.998
+  clip: 3.0
+  seed: 2026
+decision_criterion: Measurement control only; no promotion. Compare the matching K0/K1
+  pair on this same outer fold.
+outer_fold: '1'
+uid_selection: soft_targets
+eval_precision: fp32
+prerequisites:
+- Complete train/gold/weak cache coverage must pass.
+- Only run after K1 vs K0 passes fold 0; same labels/seed/schedule and direction rule.

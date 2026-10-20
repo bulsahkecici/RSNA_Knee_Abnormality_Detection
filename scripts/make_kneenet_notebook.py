@@ -39,26 +39,48 @@ with tarfile.open(fileobj=io.BytesIO(unpack(SOURCE_B64, EXPERIMENT['source_sha25
 sys.path.insert(0, str(SOURCE / 'src')); sys.path.insert(0, str(SOURCE / 'third_party'))
 os.chdir(SOURCE)
 SOFT = WORK / 'soft-labels.jsonl'; SOFT.write_bytes(unpack(SOFT_B64, EXPERIMENT['soft_labels_sha256']))
+FOLDS = WORK / 'folds.csv'; FOLDS.write_bytes(unpack(FOLDS_B64, EXPERIMENT['folds_sha256']))
+(WORK / 'evaluation-targets.jsonl').write_bytes(unpack(EVAL_B64, EXPERIMENT['labels_sha256']))
+from rsna_knee.data.folds import assert_train_uids, load_folds
+assert_train_uids(set(EXPERIMENT['train_uids']), load_folds(FOLDS))
 (WORK / 'experiment.json').write_text(json.dumps(EXPERIMENT, indent=1))
 print('Source, reader model code and labels verified.')
 '''
 
 TRAIN = r'''
 import copy, math, random, time, urllib.request
+class CalibrationComplete(Exception):
+    pass
 import numpy as np, torch, torch.nn.functional as F
 from safetensors.torch import load_file
 from rsna_knee.data.cache_build import manifest_ready
 from rsna_knee.hashing import sha256_file
 from rsna_knee.ontology import TARGET_COLUMNS
 from rsna_knee.runtime.train_payload import load_volume
+from rsna_knee.data.soft_pool import soft_table
 import knee
 assert list(knee.LABELS) == list(TARGET_COLUMNS), 'reader label order differs'
+if EXPERIMENT.get('input_normalization'):
+    knee.MEAN = tuple(EXPERIMENT['input_normalization']['mean'])
+    knee.STD = tuple(EXPERIMENT['input_normalization']['std'])
+IS_VOLUME = EXPERIMENT.get('cache_layout') == 'canonical_volumes'
+if IS_VOLUME:
+    from rsna_knee.data.volume_cache import volume_manifest_ready as manifest_ready
 if len(part_manifests) == 1:
     manifest_path = part_manifests[0]
 else:  # move shard parts into one directory; manifest_ready below re-verifies every shard
     from rsna_knee.data.cache_build import merge_cache_parts
+    if IS_VOLUME:
+        from rsna_knee.data.volume_cache import merge_volume_parts as merge_cache_parts
     merged_dir = INPUT_ROOT / ('merged-' + EXPERIMENT['cache_manifest_sha256'][:12]) / 'cache'
-    if not (merged_dir / 'manifest.json').is_file():
+    if EXPERIMENT.get('cache_access') == 'mounted_symlinks':
+        if IS_VOLUME:
+            from rsna_knee.data.volume_mounts import mounted_volume_view as mounted_view
+        else:
+            from rsna_knee.data.window_mounts import mounted_window_view as mounted_view
+        mounted_view([m.parent for m in part_manifests], merged_dir,
+                     expected_hashes=[p['manifest_sha256'] for p in EXPERIMENT['cache_parts']])
+    elif not (merged_dir / 'manifest.json').is_file():
         merge_cache_parts([m.parent for m in part_manifests], merged_dir)
     manifest_path = merged_dir / 'manifest.json'
 EXPERIMENT['merged_manifest_sha256'] = sha256_file(manifest_path)
@@ -75,11 +97,11 @@ assert sha256_file(weights) == EXPERIMENT['weights_sha256'], 'pinned weights has
 T = EXPERIMENT['train']
 manifest = json.loads(manifest_path.read_text()); STUDIES, CACHE = manifest['studies'], manifest_path.parent
 policy = manifest['preprocess_config']
-SLOT_MAP = [knee.slot_of(plane, kind == 'fluid') for plane, kind in policy['slots']]  # fluid-sensitive ~ fat-suppressed
+SLOT_MAP = list(range(6)) if IS_VOLUME else [knee.slot_of(plane, kind == 'fluid') for plane, kind in policy['slots']]
 assert len(set(SLOT_MAP)) == len(SLOT_MAP)
-N_C = int(policy['n_centers'])
-POS = np.linspace(float(policy['center_lower']), float(policy['center_upper']), N_C).astype(np.float32)
-SOFT_T = {r['StudyInstanceUID']: r['soft_targets'] for r in map(json.loads, SOFT.read_text().splitlines())}
+N_C = int(EXPERIMENT.get('eval_windows', 12)) if IS_VOLUME else int(policy['n_centers'])
+POS = None if IS_VOLUME else np.linspace(float(policy['center_lower']), float(policy['center_upper']), N_C).astype(np.float32)
+SOFT_T = soft_table(SOFT.read_bytes())
 
 
 class V5Study(torch.utils.data.Dataset):
@@ -109,6 +131,11 @@ class V5Study(torch.utils.data.Dataset):
         return torch.from_numpy(x), torch.from_numpy(mask), torch.from_numpy(pos), torch.from_numpy(y), torch.from_numpy(m), uid
 
 
+if IS_VOLUME:
+    from functools import partial
+    from rsna_knee.data.volume_dataset import VolumeStudy
+    V5Study = partial(VolumeStudy, studies=STUDIES, cache=CACHE, size=int(policy['size']), targets=SOFT_T)
+
 seed = int(T['seed']); random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
 dev = torch.device('cuda')
 cap = torch.cuda.get_device_capability(0)
@@ -116,17 +143,20 @@ amp_dtype = torch.bfloat16 if cap[0] >= 8 else torch.float16  # T4 has no bf16; 
 scaler = torch.amp.GradScaler('cuda', enabled=amp_dtype == torch.float16)
 mem = torch.cuda.get_device_properties(0).total_memory
 micro = 8 if mem >= 38e9 else (4 if mem >= 20e9 else 2)
-micro = min(micro, int(T['batch'])); accum = int(T['batch']) // micro
+micro = min(micro, int(T['batch']), int(T.get('micro_batch', micro))); accum = int(T['batch']) // micro
+assert int(T['batch']) % micro == 0
 workers = max(2, min(8, os.cpu_count() or 2))
 train_uids = [u for u in EXPERIMENT['train_uids'] if u in STUDIES]
 assert len(train_uids) == len(EXPERIMENT['train_uids']), 'train studies missing from the cache'
+required_eval = set(EXPERIMENT['gold_uids']) | set(EXPERIMENT['weak_uids'])
+assert required_eval <= set(STUDIES), 'evaluation studies missing from the cache'
 # workers are re-seeded from the main torch RNG every epoch (no persistent workers), so a resumed run draws the
 # same augmentation streams as an uninterrupted one
 train_dl = torch.utils.data.DataLoader(V5Study(train_uids, int(T['k']), True), batch_size=micro, shuffle=True,
                                        drop_last=True, num_workers=workers, pin_memory=True)
 model = knee.KneeNet(T['backbone'], pretrained=False, dim=int(T['dim']), depth=int(T['depth']))
 missing, unexpected = model.enc.load_state_dict(load_file(str(weights)), strict=False)
-assert not missing and set(unexpected) <= {'head.fc.weight', 'head.fc.bias'}, (missing, unexpected)
+assert not missing and set(unexpected) <= set(EXPERIMENT.get('pretrained_classifier_keys', ['head.fc.weight', 'head.fc.bias'])), (missing, unexpected)
 model = model.to(dev).to(memory_format=torch.channels_last)
 ema = copy.deepcopy(model).eval()
 for p in ema.parameters():
@@ -134,11 +164,18 @@ for p in ema.parameters():
 enc = list(model.enc.parameters()); head = [p for n, p in model.named_parameters() if not n.startswith('enc.')]
 opt = torch.optim.AdamW([{'params': enc, 'lr': float(T['lr'])}, {'params': head, 'lr': float(T['lr_head'])}],
                         weight_decay=float(T['wd']))
-per_epoch = len(train_dl) // accum
+per_epoch = (int(EXPERIMENT['runtime_guard']['projection_training_studies']) // micro // accum
+             if EXPERIMENT.get('runtime_guard', {}).get('calibration_only') else len(train_dl) // accum)
+assert per_epoch > 0, 'empty training: no full optimizer batches'
 steps, warm = int(T['epochs']) * per_epoch, per_epoch
 sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / warm) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / steps))))
 identity = {'id': EXPERIMENT['id'], 'config_sha256': EXPERIMENT['config_sha256'], 'train_uids_sha256': EXPERIMENT['train_uids_sha256'],
-            'micro': micro, 'accum': accum}
+            'micro': micro, 'accum': accum, 'source_sha256': EXPERIMENT['source_sha256'],
+            'cache_manifest_sha256': EXPERIMENT['cache_manifest_sha256'],
+            'merged_manifest_sha256': EXPERIMENT['merged_manifest_sha256'],
+            'soft_labels_sha256': EXPERIMENT['soft_labels_sha256'], 'folds_sha256': EXPERIMENT['folds_sha256'],
+            'weights_sha256': EXPERIMENT['weights_sha256'], 'reader_code_sha256': EXPERIMENT['reader_code_sha256']}
+identity['training_cell_sha256'] = EXPERIMENT['training_cell_sha256']
 state_path = WORK / 'kneenet-state.pt'
 step, skipped, start_ep, epoch_seconds = 0, 0, 0, []  # step counts applied updates; fp16 overflows are skipped
 if state_path.is_file():  # resume after a disconnect: Drive keeps the last finished epoch
@@ -153,6 +190,9 @@ if state_path.is_file():  # resume after a disconnect: Drive keeps the last fini
 print(f'GPU {torch.cuda.get_device_name(0)} | {amp_dtype} | micro {micro} x accum {accum} | {len(train_uids)} studies | '
       f'{per_epoch} steps/epoch | workers {workers}', flush=True)
 started = time.time()
+throughput_started = time.perf_counter(); throughput_studies = 0
+budget_spec = EXPERIMENT.get('runtime_guard')
+budget_started = budget_warm_studies = None
 for ep in range(start_ep, int(T['epochs'])):
     model.train(); t_ep, tot, n = time.time(), 0.0, 0
     opt.zero_grad(set_to_none=True)
@@ -162,6 +202,58 @@ for ep in range(start_ep, int(T['epochs'])):
             logit = model(x, mask, pos, res=int(T['res']), train=True)
         loss = (F.binary_cross_entropy_with_logits(logit.float(), y, reduction='none') * m).sum() / m.sum().clamp_min(1)
         scaler.scale(loss / accum).backward()
+        throughput_studies += len(x)
+        if throughput_studies == micro * 16:
+            measured = {'kind': 'real_training_throughput', 'micro_batches': 16,
+                        'studies_per_second': throughput_studies / (time.perf_counter() - throughput_started),
+                        'gpu': torch.cuda.get_device_name(0), 'micro_batch': micro,
+                        'peak_cuda_bytes': torch.cuda.max_memory_allocated()}
+            (WORK / 'throughput.json').write_text(json.dumps(measured, indent=2))
+            print('Measured throughput:', measured, flush=True)
+        if budget_spec:
+            guard_warmup = int(budget_spec['warmup_micro_batches'])
+            guard_measure = int(budget_spec['measure_micro_batches'])
+            if throughput_studies == micro * guard_warmup:
+                torch.cuda.synchronize()
+                budget_started, budget_warm_studies = time.perf_counter(), throughput_studies
+            if throughput_studies == micro * (guard_warmup + guard_measure):
+                torch.cuda.synchronize()
+                from rsna_knee.runtime.training_budget import assess_training_budget
+                resource_gate = assess_training_budget(
+                    measured_studies=throughput_studies - budget_warm_studies,
+                    measured_seconds=time.perf_counter() - budget_started,
+                    total_training_studies=int(budget_spec.get('projection_training_studies', len(train_uids))) * int(T['epochs']),
+                    peak_cuda_bytes=torch.cuda.max_memory_allocated(), device_vram_bytes=mem,
+                    max_projected_training_seconds=budget_spec['max_projected_training_seconds'],
+                    max_peak_vram_fraction=budget_spec['max_peak_vram_fraction'])
+                (WORK / 'resource-gate.json').write_text(json.dumps(resource_gate, indent=2))
+                print('Measured resource gate:', resource_gate, flush=True)
+                if not resource_gate['pass']:
+                    (WORK / 'campaign-result.json').write_text(json.dumps({'exit_reason': 'budget_guard_stop',
+                                                                         'resource_gate': resource_gate}))
+                    raise RuntimeError('Measured resource budget exceeded; no full training or AUC claimed')
+                if budget_spec.get('calibration_only'):
+                    assert step > 0, 'calibration requires applied optimizer updates'
+                    opt.zero_grad(set_to_none=True)
+                    ema.eval()
+                    torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = False
+                    eval_dl = torch.utils.data.DataLoader(V5Study(train_uids[:micro], N_C, False), batch_size=micro)
+                    with torch.no_grad():
+                        ex, em, ep_, _, _, _ = next(iter(eval_dl))
+                        result = ema(ex.to(dev), em.to(dev), ep_.to(dev), res=int(T['res']), train=False)
+                    assert torch.isfinite(result).all()
+                    torch.cuda.synchronize()
+                    peak = torch.cuda.max_memory_allocated()
+                    assert peak / mem <= budget_spec['max_peak_vram_fraction'], 'fp32 evaluation VRAM exceeded'
+                    calibration = {'kind': 'real_resource_calibration_not_validation', 'pass': True,
+                        'experiment_id': EXPERIMENT['id'], 'config_sha256': EXPERIMENT['config_sha256'],
+                        'training_cell_sha256': EXPERIMENT['training_cell_sha256'],
+                        'weights_sha256': EXPERIMENT['weights_sha256'], 'applied_optimizer_steps': step,
+                        'n_train': len(train_uids), 'n_gold': len(EXPERIMENT['gold_uids']),
+                        'n_weak': len(EXPERIMENT['weak_uids']), 'fp32_eval_windows': N_C,
+                        'train_and_eval_peak_cuda_bytes': peak, 'resource_gate': resource_gate}
+                    (WORK / 'calibration-result.json').write_text(json.dumps(calibration, indent=2))
+                    raise CalibrationComplete()
         tot += loss.item(); n += 1
         if (i + 1) % accum:
             continue
@@ -194,14 +286,18 @@ for ep in range(start_ep, int(T['epochs'])):
 job = WORK / 'job'; job.mkdir(exist_ok=True)
 ckpt = job / 'checkpoint.pt'
 torch.save({'model': ema.state_dict(), 'kneenet': {k: T[k] for k in ('backbone', 'dim', 'depth', 'res')},
-            'step': step, 'reader_code_sha256': EXPERIMENT['reader_code_sha256']}, ckpt)
+            'step': step, 'reader_code_sha256': EXPERIMENT['reader_code_sha256'],
+            **({'input_normalization': EXPERIMENT['input_normalization']} if 'input_normalization' in EXPERIMENT else {})}, ckpt)
 ema.eval(); rows = []
+strict_eval = EXPERIMENT.get('eval_precision') == 'fp32'
+if strict_eval:
+    torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = False
 for split, uids in (('gold', EXPERIMENT['gold_uids']), ('weak', EXPERIMENT['weak_uids'])):
     uids = [u for u in uids if u in STUDIES]
     dl = torch.utils.data.DataLoader(V5Study(uids, N_C, False), batch_size=micro, num_workers=workers)
     with torch.no_grad():
         for x, mask, pos, _, _, ids in dl:
-            with torch.autocast('cuda', dtype=amp_dtype):
+            with torch.autocast('cuda', dtype=amp_dtype, enabled=not strict_eval):
                 p = ema(x.to(dev), mask.to(dev), pos.to(dev), res=int(T['res'])).float().sigmoid().cpu().numpy()
             for uid, prob in zip(ids, p):
                 rows.append({'StudyInstanceUID': uid, 'split': split, **{c: float(v) for c, v in zip(TARGET_COLUMNS, prob)}})
@@ -216,6 +312,7 @@ with torch.no_grad():
         gold_fp32.update({uid: [float(v) for v in prob] for uid, prob in zip(ids, p)})
 (job / 'metrics.json').write_text(json.dumps({
     'kind': 'real', 'model': 'kneenet', 'train_uids': sorted(train_uids), 'epoch_wall_seconds': epoch_seconds,
+    'eval_precision': EXPERIMENT.get('eval_precision', str(amp_dtype)),
     'skipped_updates': skipped, 'applied_updates': step, 'attempted_updates': step + skipped, 'amp_dtype': str(amp_dtype), 'micro_batch': micro,
     'oof_provenance': {'checkpoint_sha256': sha256_file(ckpt), 'encoder': 'kneenet_' + T['backbone'], 'step': step},
     'n_gold': sum(r['split'] == 'gold' for r in rows), 'n_weak': sum(r['split'] == 'weak' for r in rows),
@@ -227,12 +324,18 @@ print('Training status: ok', flush=True)
 '''
 
 
-def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha256s: list[str], ref: str) -> Path:
-    if not cache_kernels or len(cache_kernels) != len(cache_manifest_sha256s):
+def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha256s: list[str], ref: str,
+             prepare_without_cache: bool = False) -> Path:
+    if prepare_without_cache and (cache_kernels or cache_manifest_sha256s):
+        raise SystemExit('pending-cache preparation cannot include cache pins')
+    if not prepare_without_cache and (not cache_kernels or len(cache_kernels) != len(cache_manifest_sha256s)):
         raise SystemExit("give one manifest sha256 per cache kernel")
     parts = [{"kernel": k, "manifest_sha256": s} for k, s in zip(cache_kernels, cache_manifest_sha256s, strict=True)]
-    cache_id = parts[0]["manifest_sha256"] if len(parts) == 1 else mcn._sha(",".join(cache_manifest_sha256s).encode())
+    cache_id = (parts[0]["manifest_sha256"] if len(parts) == 1 else
+                mcn._sha(",".join(cache_manifest_sha256s).encode()) if parts else None)
     spec = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if prepare_without_cache and spec.get('cache_layout') != 'canonical_volumes':
+        raise SystemExit('pending-cache preparation is only for canonical volume experiments')
     exp_id = spec["experiment_id"]
     if spec.get("train", {}).get("model") != "kneenet":
         raise SystemExit("not a KneeNet config")
@@ -242,18 +345,36 @@ def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha2
     soft = (ROOT / spec["labels"]["file"]).read_bytes()
     if mcn._sha(soft) != spec["labels"]["sha256"]:
         raise SystemExit("soft label table differs from the config")
-    allow = yaml.safe_load((ROOT / "configs/models/convnext_tiny.yaml").read_text())["weights_sha256_allowlist"]
+    backbone = spec['train']['backbone']
+    if backbone not in ('convnext_tiny', 'tf_efficientnetv2_s'):
+        raise SystemExit('unsupported KneeNet backbone')
+    registry = yaml.safe_load((ROOT / f'configs/models/{backbone}.yaml').read_text())
+    allow = registry['weights_sha256_allowlist']
+    if backbone != 'convnext_tiny' and spec.get('input_normalization') != registry['input_normalization']:
+        raise SystemExit('pretrained input normalization mismatch')
+    if backbone != 'convnext_tiny' and (spec.get('pretrained_classifier_keys') != registry['pretrained_classifier_keys']
+            or spec['weights'].get('url') != registry['weights_url']
+            or spec['weights'].get('encoder') != backbone):
+        raise SystemExit('pretrained encoder provenance mismatch')
     if spec["weights"]["sha256"] not in allow:
         raise SystemExit("backbone weights are not allowlisted")
     outer_fold = str(spec.get("outer_fold", "0"))
     folds_path = ROOT / spec["folds"]
     labels, folds = mcn.LABELS.read_bytes(), folds_path.read_bytes()
-    uids = mcn.train_uids(folds_path, labels, outer_fold)
     rows = mcn.load_folds(folds_path)
+    if spec.get('uid_selection') == 'soft_targets':
+        from rsna_knee.data.soft_pool import soft_training_uids
+        uids = soft_training_uids(rows, soft, outer_fold, spec.get('exclude_folds', ()))
+    else:
+        uids = mcn.train_uids(folds_path, labels, outer_fold, tuple(spec.get('exclude_folds') or ()))
     gold = sorted(r["StudyInstanceUID"] for r in rows if r.get("gold_set"))
     weak = [] if outer_fold == "none" else sorted(
         r["StudyInstanceUID"] for r in rows if str(r["fold"]) == outer_fold and not r.get("gold_set"))
     archive, names = mcn.source_archive(ref, extra=("configs", "pyproject.toml"))
+    if 'src/rsna_knee/data/soft_pool.py' not in names:
+        raise SystemExit('source ref predates the soft-label validator; use a current committed ref or --ref WORKTREE')
+    if spec.get('cache_layout') == 'canonical_volumes' and 'src/rsna_knee/data/volume_dataset.py' not in names:
+        raise SystemExit('source ref predates K1 volume support')
     experiment = {
         "id": exp_id, "hypothesis": spec.get("hypothesis"), "config_file": str(config_path.relative_to(ROOT)),
         "config_sha256": mcn._sha(config_path.read_bytes()), "train": spec["train"], "outer_fold": outer_fold,
@@ -261,23 +382,51 @@ def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha2
         "cache_parts": parts, "cache_manifest_sha256": cache_id,
         "labels_sha256": mcn._sha(labels), "folds_file": spec["folds"], "folds_sha256": mcn._sha(folds),
         "source_sha256": mcn._sha(archive), "n_source_files": len(names), **mcn.git_identity(ref),
-        "weights_url": WEIGHTS_URL, "weights_file": WEIGHTS_FILE, "weights_sha256": spec["weights"]["sha256"],
+        "weights_url": spec["weights"].get("url", WEIGHTS_URL), "weights_file": spec["weights"].get("runtime_file", WEIGHTS_FILE), "weights_sha256": spec["weights"]["sha256"],
         "soft_labels_sha256": spec["labels"]["sha256"], "reader_code_sha256": spec["reader_code"]["sha256"],
         "submission": False,
+        "training_cell_sha256": mcn._sha(TRAIN.encode()),
+        "generator_sha256": mcn._sha(Path(__file__).read_bytes()),
     }
-    header = (f"# RSNA {exp_id} (KneeNet on our v5 cache)\n\n**Hypothesis:** {spec.get('hypothesis', '')}\n\n"
+    experiment.update({k: spec[k] for k in ('uid_selection', 'cache_layout', 'eval_windows', 'eval_precision',
+                                           'decision_rule', 'runtime_guard', 'input_normalization', 'pretrained_classifier_keys') if k in spec})
+    if prepare_without_cache:
+        experiment['cache_status'] = 'awaiting_real_volume_cache'
+    # Record coverage differences independently of the old experiment identities.
+    if spec.get('uid_selection') == 'soft_targets':
+        experiment['legacy_train_count'] = len(mcn.train_uids(folds_path, labels, outer_fold))
+        experiment['added_soft_count'] = len(set(uids) - set(mcn.train_uids(folds_path, labels, outer_fold)))
+    layout = 'canonical full-series volumes' if spec.get('cache_layout') == 'canonical_volumes' else 'v5 cache'
+    header = (f"# RSNA {exp_id} (KneeNet on {layout})\n\n**Hypothesis:** {spec.get('hypothesis', '')}\n\n"
               f"Control: {spec['control']}. Outer holdout fold {outer_fold}; all 58 gold studies excluded from training. "
               "Model code: goodpjw2008/rsna-knee-2-5d-convnext-reader knee.py (Apache-2.0), pinned by sha256. "
               "Local validation only; this notebook does not submit.\n\nSelect a Colab GPU runtime, then Run All. "
               "Checkpoints live on Drive after every epoch, so re-running after a disconnect resumes.")
+    if prepare_without_cache:
+        header = (f'# {exp_id} — eğitim notebooku / cache bekleniyor\n\n'
+                  '**Durum:** Eğitim tarifi ve kaynak kod hazır; gerçek K1 hacim cache’i henüz üretilmedi. '
+                  'Bu dosya cache doğrulanana kadar GPU/eğitim aşamasına geçmez.\n\n'
+                  '1. Önce **K1-PILOT.ipynb** dosyasını Kaggle üzerinde, yarışma verisi bağlı bir CPU oturumunda çalıştırın.\n'
+                  '2. Pilot QC raporunu değerlendirin; ölçülen boyut/süreye göre tam cache parçalarını üretin.\n'
+                  '3. Gerçek parça kernel adları ve manifest dosyası SHA256 değerleriyle bu notebooku yeniden üretin. '
+                  'Cache listesine v5 parçalarını koymayın.\n\n'
+                  f'Kontrol: {spec["control"]}; forward çözünürlük: {spec["train"]["res"]} px; '
+                  'gold/grup dışlamaları korunur. Henüz eğitim sonucu yok.')
+    setup = mcn.SETUP.replace("'timm'", "'timm', 'opencv-python-headless>=4.10,<5'")
+    if prepare_without_cache:
+        message = ('K1 hacim cache’i henüz bağlı değil. Önce K1-PILOT.ipynb, ardından tam cache '
+                   'üretimini tamamlayın; gerçek manifest SHA256 değerleriyle K1.ipynb dosyasını yeniden üretin.')
+        setup = f'raise RuntimeError({message!r})\n' + setup
     cells = [
         mcn._md(header),
         mcn._code("import json\nEXPERIMENT = json.loads(" + repr(json.dumps(experiment, indent=1)) + ")"),
-        mcn._code(mcn.SETUP),
+        mcn._code(setup),
         mcn._code(mcn.AUTH_AND_CACHE),
         mcn._code(f"SOURCE_B64 = {base64.b64encode(archive).decode()!r}\n"
                   f"KNEE_B64 = {base64.b64encode(knee).decode()!r}\n"
-                  f"SOFT_B64 = {base64.b64encode(soft).decode()!r}\n" + PAYLOAD),
+                  f"SOFT_B64 = {base64.b64encode(soft).decode()!r}\n"
+                  f"FOLDS_B64 = {base64.b64encode(folds).decode()!r}\n"
+                  f"EVAL_B64 = {base64.b64encode(labels).decode()!r}\n" + PAYLOAD),
         mcn._code(TRAIN),
         mcn._code(mcn.COLLECT),
     ]
@@ -299,12 +448,15 @@ def generate(config_path: Path, *, cache_kernels: list[str], cache_manifest_sha2
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("config", type=Path)
-    parser.add_argument("--cache-kernel", required=True, action="append")
-    parser.add_argument("--cache-manifest-sha256", required=True, action="append")
+    parser.add_argument("--cache-kernel", action="append", default=[])
+    parser.add_argument("--cache-manifest-sha256", action="append", default=[])
+    parser.add_argument('--prepare-without-cache', action='store_true',
+                        help='write an explicitly blocked K1 notebook without inventing cache hashes')
     parser.add_argument("--ref", default="HEAD")
     args = parser.parse_args()
     print(generate(args.config.resolve(), cache_kernels=args.cache_kernel,
-                   cache_manifest_sha256s=args.cache_manifest_sha256, ref=args.ref))
+                   cache_manifest_sha256s=args.cache_manifest_sha256, ref=args.ref,
+                   prepare_without_cache=args.prepare_without_cache))
 
 
 if __name__ == "__main__":

@@ -303,6 +303,52 @@ def verify_package(dest_dir: Path) -> list[str]:
     return errors
 
 
+def _kneenet_checkpoint_errors(path: Path, blob: dict[str, Any]) -> list[str]:
+    """Validate a trained KneeNet using its adjacent, hash-pinned reader source.
+
+    Offline packages carry knee.py alongside checkpoint.pt. No model code or
+    pretrained weights are fetched here; real-data parity is a separate audit.
+    """
+    import importlib.util
+    import torch
+
+    approved_reader_sha = "314c2af387a5cbd1d25f192f19f4ecc6d4ae4b30403e92e9d9b3ed2c325880b1"
+    errors = []
+    if int(blob.get("step") or 0) < 1:
+        errors.append("checkpoint_no_optimizer_step")
+    source = path.parent / "knee.py"
+    if (blob.get("reader_code_sha256") != approved_reader_sha or not source.is_file()
+            or sha256_file(source) != approved_reader_sha):
+        return errors + ["checkpoint_reader_source_mismatch"]
+    cfg = blob["kneenet"]
+    if (cfg.get("backbone") not in ("convnext_tiny", "tf_efficientnetv2_s") or cfg.get("dim") != 384 or cfg.get("depth") != 2
+            or cfg.get("res") not in (256, 320, 384)):
+        return errors + ["checkpoint_kneenet_config"]
+    expected_norm = ({'mean': [0.5] * 3, 'std': [0.5] * 3}
+                     if cfg['backbone'] == 'tf_efficientnetv2_s' else
+                     {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]})
+    if ((cfg['backbone'] == 'tf_efficientnetv2_s' and cfg['res'] != 256)
+            or blob.get('input_normalization', expected_norm if cfg['backbone'] == 'convnext_tiny' else None) != expected_norm):
+        return errors + ['checkpoint_input_normalization']
+    weights = blob.get("model")
+    if not isinstance(weights, dict) or not weights:
+        return errors + ["checkpoint_state_missing"]
+    if any(not isinstance(w, torch.Tensor) or not torch.isfinite(w).all().item() for w in weights.values()):
+        return errors + ["checkpoint_nonfinite_weights"]
+    try:
+        spec = importlib.util.spec_from_file_location("rsna_pinned_knee", source)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        from rsna_knee.ontology import TARGET_COLUMNS
+        if list(module.LABELS) != list(TARGET_COLUMNS):
+            return errors + ["checkpoint_target_order"]
+        model = module.KneeNet(cfg["backbone"], pretrained=False, dim=cfg["dim"], depth=cfg["depth"])
+        model.load_state_dict(weights, strict=True)
+    except Exception:
+        errors.append("checkpoint_state_mismatch")
+    return errors
+
+
 def _checkpoint_errors(path: Path) -> list[str]:
     from rsna_knee.models.dinov2 import Dinov2ViTS14
     from rsna_knee.models.study import StudyModel
@@ -312,6 +358,8 @@ def _checkpoint_errors(path: Path) -> list[str]:
         blob = torch_load(path)
     except Exception:
         return ["checkpoint_unreadable"]
+    if isinstance(blob.get("kneenet"), dict):
+        return _kneenet_checkpoint_errors(path, blob)
     errors: list[str] = []
     if blob.get("encoder_name") != "dinov2_vits14":
         errors.append("checkpoint_encoder")

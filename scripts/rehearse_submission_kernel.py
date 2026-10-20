@@ -35,8 +35,19 @@ from rsna_knee.ontology import TARGET_COLUMNS  # noqa: E402
 from rsna_knee.runtime.train_payload import load_volume  # noqa: E402
 
 
-def competition_input(scratch: Path) -> tuple[Path, list[str]]:
+def competition_input(scratch: Path, canonical: bool = False) -> tuple[Path, list[str]]:
     root, uids = rh.synthetic_inputs(scratch)
+    if canonical:
+        import pydicom
+        iops = {'sag': [0, 1, 0, 0, 0, -1], 'cor': [1, 0, 0, 0, 0, -1], 'ax': [1, 0, 0, 0, 1, 0]}
+        for path in (root / 'train_series').rglob('*.dcm'):
+            ds = pydicom.dcmread(path)
+            plane = path.parent.name.split('-')[0]
+            ds.ImageOrientationPatient = iops[plane]
+            ipp = [0., 0., 0.]
+            ipp[['sag', 'cor', 'ax'].index(plane)] = float(ds.InstanceNumber) * 3
+            ds.ImagePositionPatient, ds.PixelSpacing = ipp, [19.2, 19.2]
+            ds.save_as(path, enforce_file_format=True)
     comp = scratch / "kernel-input/competition"
     if not (comp / "test.csv").is_file():
         shutil.copytree(root / "train_series", comp / "train_series")
@@ -72,18 +83,22 @@ def run_kernel(kernel: Path, upload: Path, comp: Path, scratch: Path, name: str,
 
 def notebook_eval(exp: str, manifest_path: Path, uids: list[str]) -> dict[str, np.ndarray]:
     """The generated notebook's V5Study evaluation, with that run's checkpoint, in strict fp32."""
-    nb = json.loads((ROOT / "notebooks/generated" / f"{exp}.ipynb").read_text())
-    cell = next("".join(c["source"]) for c in nb["cells"] if "class V5Study" in "".join(c["source"]))
+    cell = next(c for c in msk.notebook_cells(exp) if "class V5Study" in c)
     if msk._sha(Path(knee.__file__).read_bytes()) != msk._sha(msk.notebook_blob(exp, "KNEE_B64")):
         raise SystemExit("local knee.py differs from the notebook's embedded reader code")
     manifest = json.loads(manifest_path.read_text())
     policy = manifest["preprocess_config"]
-    n_c = int(policy["n_centers"])
-    ns = {"np": np, "torch": torch, "knee": knee, "load_volume": load_volume, "TARGET_COLUMNS": TARGET_COLUMNS,
-          "STUDIES": manifest["studies"], "CACHE": manifest_path.parent, "N_C": n_c, "SOFT_T": {},
-          "SLOT_MAP": [knee.slot_of(plane, kind == "fluid") for plane, kind in policy["slots"]],
-          "POS": np.linspace(float(policy["center_lower"]), float(policy["center_upper"]), n_c).astype(np.float32)}
-    exec(cell[cell.index("class V5Study"):cell.index("\nseed = int(")], ns)
+    canonical = policy.get('version') == 'k1-canonical-volumes-v1'
+    if canonical:
+        from functools import partial
+        from rsna_knee.data.volume_dataset import VolumeStudy
+        build = json.loads((ROOT / 'notebooks/generated' / f'{exp}.build.json').read_text())
+        n_c = int(build.get('eval_windows', 12))
+        ns = {'V5Study': partial(VolumeStudy, studies=manifest['studies'], cache=manifest_path.parent,
+                                  size=policy['size'], targets={})}
+    else:
+        n_c = int(policy["n_centers"])
+        ns = legacy_dataset_namespace(cell, policy, manifest, manifest_path, n_c)
     ck = torch.load(ROOT / "artifacts/colab" / f"p1-{exp}" / "output/job/checkpoint.pt", map_location="cpu", weights_only=False)
     cfg = ck["kneenet"]
     model = knee.KneeNet(cfg["backbone"], pretrained=False, dim=int(cfg["dim"]), depth=int(cfg["depth"]))
@@ -97,12 +112,22 @@ def notebook_eval(exp: str, manifest_path: Path, uids: list[str]) -> dict[str, n
     return out
 
 
+def legacy_dataset_namespace(cell, policy, manifest, manifest_path, n_c):
+    ns = {"np": np, "torch": torch, "knee": knee, "load_volume": load_volume, "TARGET_COLUMNS": TARGET_COLUMNS,
+          "STUDIES": manifest["studies"], "CACHE": manifest_path.parent, "N_C": n_c, "SOFT_T": {},
+          "SLOT_MAP": [knee.slot_of(plane, kind == "fluid") for plane, kind in policy["slots"]],
+          "POS": np.linspace(float(policy["center_lower"]), float(policy["center_upper"]), n_c).astype(np.float32)}
+    exec(cell[cell.index("class V5Study"):cell.index("\nseed = int(")], ns)
+    return ns
+
+
 def read_jsonl(path: Path) -> dict[str, np.ndarray]:
     return {r["StudyInstanceUID"]: np.array([r[t] for t in TARGET_COLUMNS]) for r in map(json.loads, path.read_text().splitlines())}
 
 
 def rehearse(exps: list[str], scratch: Path) -> None:
-    comp, uids = competition_input(scratch)
+    canonical = json.loads((ROOT / 'notebooks/generated' / f'{exps[0]}.build.json').read_text()).get('cache_layout') == 'canonical_volumes'
+    comp, uids = competition_input(scratch, canonical)
     slug = "rehearsal-" + "-".join(e.lower() for e in exps)
     upload, kernel = msk.build(exps, slug)
     try:

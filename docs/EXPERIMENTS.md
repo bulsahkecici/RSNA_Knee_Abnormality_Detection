@@ -599,3 +599,483 @@ Rule (fixed before the run): K5ALL alone needs a CI lower bound > 0 vs R — fai
 Precision check from the two fp32 gold records: bf16-autocast vs strict fp32 gold probabilities differ by max 0.065 / mean 0.005 (S2) and 0.062 / 0.0047 (S3) — beyond the kernel's 0.02 / 0.002 parity limits. So a bf16 reference cannot serve as parity for the fp32 kernel; K5ALL would need an fp32 re-score before any kernel containing it. Not needed now, since no K5 candidate passed.
 
 **Final selection decision (2026-10-14).** Model development stops here: the fixed rules left no K5 candidate, and more seeds of the same recipe are the diminishing-returns area. Final selections (made by the user in the Kaggle UI; the CLI cannot select): **1. reader-only 57178710 (public 0.929)**; **2. route 57184259 (public 0.927)** — within noise of reader-only, and the one entry that carries a model we trained, as a small private-split hedge. K5F0 is still recorded when it arrives but cannot change this.
+
+### 2026-10-15 — K0/K1 implementation prepared at the user's request; not trained
+
+P5 K0BASE/K0/K1 introduce a matched fp32 measurement baseline, soft-source UID coverage,
+and canonical full-series sampling with KneeNet's forward resolution held at 256 px.
+Fold-0 training coverage changes 3341 → 3479 (+138); the all-fold eligible soft pool is
+4348, excluding every gold/group member. Full-cache accessibility has not been verified
+locally. K5F0 results are absent locally, not assumed complete. New identities preserve
+all historic K5 records. Fixed weak delta ≥ +0.004 and paired bootstrap lower bound > 0;
+gold/class regressions are reported, and a second outer fold must confirm direction.
+No new real AUC, remote job, submission, promotion or final selection change.
+Implementation and handoff: [K0/K1](K0_K1_IMPLEMENTATION_20261015.md).
+
+### 2026-10-15 — K0BASE / K0 completed: coverage expansion does not pass the pre-run gain rule
+
+Real Colab outputs ingested and reviewed. Both runs used A100-SXM4-40GB, 14 epochs,
+strict fp32 evaluation, the same pinned source/training cell, soft labels, fixed numeric
+evaluation targets, folds, v5 cache and pretrained weights. Checkpoint hashes and
+train UID hashes verified; gold and duplicate-group exclusions passed. K0BASE trained
+3341 studies / 5838 updates; K0 trained 3479 / 6076 updates, with zero skipped updates.
+The added 138 studies also increase optimizer updates at the unchanged epoch schedule;
+this comparison does not isolate example quality from that exposure difference.
+
+| Split | K0BASE | K0 | K0 − baseline, paired 95% CI |
+|---|---:|---:|---|
+| Weak hard labels (837 scored studies) | 0.87415 | 0.86955 | −0.00461 [−0.01338, +0.00371] |
+| Gold all (58, reused development set) | 0.89344 | 0.88588 | −0.00756 [−0.02582, +0.00880] |
+| Gold A (29) | 0.91599 | 0.91505 | −0.00093 [−0.01933, +0.01914] |
+| Gold B (29) | 0.87016 | 0.85708 | −0.01308 [−0.05200, +0.03265] |
+
+All 869 expected weak studies have predictions; 32 lack a local numeric label row and
+are explicitly excluded from weak scoring. Bootstrap: 2000 paired study draws, seed
+2026. The pre-registered weak requirement (delta ≥ +0.004 and CI lower bound > 0)
+fails: **K0 not supported; no promotion**. Both macro CIs include zero, so these runs
+do not establish a statistically clear overall loss either. The corrected soft-source
+pool remains a data-coverage policy, not a demonstrated performance improvement.
+
+Descriptive class regressions: weak Synovitis −0.07373 and Baker's −0.02612;
+gold Fracture −0.06806, Lateral OA −0.05222, Baker's −0.02717 and Contusion −0.02699.
+Gold Lateral Meniscus improves +0.08199. These are exploratory class deltas, not
+classwise significance or a routing rule. Runtime was 1941.9 s vs 2037.0 s; peak
+allocation about 27.1 GB in each run.
+
+K1's representation hypothesis is still untested. Keep K0 as its fixed same-pool
+control; require the real DICOM geometry/decode pilot and verified full-volume cache
+before K1 training. A K1-vs-K0 pass would require second-fold confirmation and must
+also be inspected against K0BASE; beating a lower control alone is not evidence of
+beating the legacy baseline. Reader-only and the existing submission choices remain
+unchanged. No new public score, submission or GPU job was created during review.
+
+Evidence: `artifacts/colab/p1-K0BASE/output/review.json`,
+`artifacts/colab/p1-K0/output/review.json`,
+`artifacts/research/k0-run-verification.json`. Original configurations/build identities
+were not edited to mark completion.
+
+### 2026-10-15 — K1 real-DICOM pilot pushed through Kaggle CLI
+
+At the user's request, the private CPU notebook `bulsahkecici/rsna-k1-volume-pilot-20261015`
+was pushed as **version 1**, with competition data attached, Internet enabled, GPU disabled
+and a 3600-second run limit. Kaggle returned a successful push receipt and status
+`KernelWorkerStatus.RUNNING`. Scope: 64-study canonical-volume header/decode/QC pilot;
+no model training or competition submission. The notebook exports JSON-only QC results;
+MRI volumes stay remote. Success and cache suitability remain unverified until outputs
+are collected. Receipt: `artifacts/kaggle/rsna-k1-volume-pilot-20261015/push-receipt-v1.json`.
+
+### 2026-10-15 — Five K1 full-cache CPU jobs explicitly authorized and started
+
+The user explicitly approved five private Kaggle CPU cache jobs after automatic review
+required a scope-specific approval. All five kernels
+`bulsahkecici/rsna-k1-vol-shard{0,1,2,3,4}-20261015` were successfully pushed as
+**version 1** and independently observed as `KernelWorkerStatus.RUNNING`.
+Each has an 18 GiB compressed payload guard and a 10800-second runtime limit.
+The disjoint sorted-UID shard policy is index::5. The real 64-study pilot measured
+981742812 payload bytes and 370.78 seconds, projecting approximately 62.96 GiB
+for 4407 studies (sample projection, not a guaranteed full-build size or duration).
+No MRI payload is downloaded to this Mac, no GPU training has started, and no
+competition submission occurred. Next prerequisite: completed jobs with complete,
+verified manifests and payloads; K1 training remains dependent on those outputs.
+Job receipt/status records: `artifacts/research/k1-cache-execution-plan.json` and each
+`artifacts/kaggle/rsna-k1-vol-shard*-20261015/push-receipt-v1.json`.
+
+### 2026-10-15 — K1 full-cache audit passed; actual GPU training job pushed
+
+All five cache kernels completed with status ok, covering 4407/4407 studies,
+65.8654 GiB and 24370 usable series. One unsupported-in-plane-geometry series
+was explicitly excluded; no study was quarantined. 1936 studies have alternatives.
+Receipt/source/manifest hashes, disjoint part membership and complete study universe
+were verified from downloaded JSON only. All MRI NPZ payloads remain on Kaggle.
+K1 has 3479 training / 58 gold / 869 weak studies; the training/gold overlap is zero
+and duplicate-group exclusions passed.
+
+A Kaggle-native K1 notebook now reads the five pinned kernel outputs through a
+symlink view in /tmp, avoiding a 65.9 GiB copy or re-export in the working folder.
+Full payload hashes and shape/pixel QC are rechecked remotely before training.
+The recipe remains 14 epochs, seed 2026, 256 px forward resolution and strict fp32
+evaluation, matched to K0's targets/schedule. Actual GPU and AMP dtype will be
+recorded by the runtime (K0 used A100/bf16); this is not claimed to be a pure
+single-component causal ablation.
+
+Kaggle initially rejected the 7.9 MiB notebook because source must be <1 MB.
+Lossless, SHA256-verified LZMA packaging reduced API source to 885044 bytes;
+the decoded payload is byte-identical to the successful CPU rehearsal. No label,
+model or training-code content was altered by packing. 61 targeted tests and
+Ruff passed; the mounted K1 rehearsal resumed with bit-identical EMA and predictions,
+with all collected rehearsal outputs explicitly synthetic.
+
+Private kernel `bulsahkecici/rsna-k1-kneenet-fold0-20261015` was accepted as
+**version 1**, with requested accelerator `NvidiaTeslaT4` and a 43200-second runtime
+limit. GPU quota check before launch: 24.79 hours remaining. Status was independently
+observed as `KernelWorkerStatus.RUNNING`; GPU handshake/optimizer progress had not
+yet appeared in the initial logs. **No K1 training result or new AUC yet.** No model
+promotion or competition submission. Receipt:
+`artifacts/kaggle/rsna-k1-kneenet-fold0-20261015/push-receipt-v1.json`;
+cache audit: `artifacts/research/k1-full-cache-audit.json`.
+
+### 2026-10-15 — K1 completed: passes the pre-registered fold-0 rule vs K0
+
+Kaggle `rsna-k1-kneenet-fold0-20261015` v1 completed successfully. Real metrics:
+14 epochs, 3479 training studies, 6076 attempted / 6073 applied updates and 3
+fp16 overflow skips (scheduler/EMA skipped with the optimizer). Actual hardware:
+Tesla T4, microbatch 2 with accumulation to 8; K0 was A100/bf16. Evaluation is
+strict fp32 in both arms. Runtime recorded by the training/evaluation cell:
+11573.9 s (~3.21 h), peak CUDA allocation 8.708 GB. Initial measured throughput
+0.554 studies/s includes the early training startup and is not a steady-state ETA.
+
+| Split | K0 | K1 | K1 − K0, paired 95% CI |
+|---|---:|---:|---|
+| Weak hard labels (837 scored) | 0.86955 | 0.87816 | +0.00861 [+0.00133, +0.01670] |
+| Gold all (58, reused development set) | 0.88588 | 0.90311 | +0.01724 [+0.00265, +0.03383] |
+| Gold A (29) | 0.91505 | 0.91723 | +0.00218 [−0.01997, +0.02422] |
+| Gold B (29) | 0.85708 | 0.89119 | +0.03411 [−0.00360, +0.07602] |
+
+The fixed weak requirement delta ≥ +0.004 and CI lower bound > 0 passes.
+**Decision: passes_this_fold_only; no automatic promotion.** Bootstrap uses 2000
+paired study draws, seed 2026. All 58 gold and 869 weak predictions are present,
+unique and finite; 32 weak studies lack a local numeric-label row and are
+explicitly excluded from weak scoring. Gold remains repeatedly used development
+data; neither gold subset is called an unseen test set.
+
+Source/config/labels/folds/cache/training/platform hashes matched the pinned build.
+Training UID hash, gold/duplicate-group exclusions, expected update count, checkpoint
+SHA256 and model metadata passed. Saved weights are finite and nonempty. The
+strict-fp32 gold reference equals the gold prediction file exactly (max abs delta 0).
+The original results ZIP download failed with a connection reset; exact individual
+metrics/prediction/provenance files and checkpoint were successfully fetched instead.
+No MRI volumes were downloaded. No raw reports were read or uploaded.
+
+Class regressions vs K0 are descriptive: gold Effusion −0.02609, Lateral Meniscus
+−0.02236, Medial OA −0.01550 and Medial Meniscus −0.00841; weak MCL −0.00795,
+Medial Meniscus −0.00349 and Fracture −0.00239. Gold gains include Contusion +0.05263,
+Synovitis +0.05257, Fracture +0.05139 and MCL +0.04762. No class routing is selected.
+This is a representation-package experiment with a runtime precision/hardware
+change; it does not identify one preprocessing component as the cause.
+
+Supplementary checks against the stronger legacy K0BASE: weak +0.00401
+[−0.00473, +0.01149], gold +0.00968 [−0.00555, +0.02615]. Those CIs include zero,
+so improvement over the legacy baseline is not established. Reader gold remains
+0.91053; K1 − reader = −0.00742 [−0.02223, +0.00627]. Reader weak predictions are
+not an independent holdout and were not scored. These checks do not revise the
+pre-registered K0 comparison or justify replacing reader-only.
+
+Next required confirmation is the same-direction K1F1-vs-K0F1 comparison on a
+second outer fold. Neither second-fold job, K2 resolution experiment, submission,
+blend/routing search nor model promotion was started during this review. The
+reader-only candidate and existing final submission choices remain unchanged.
+
+Evidence: `artifacts/colab/p1-K1/output/review.json`,
+`artifacts/research/k1-run-verification.json`,
+`artifacts/research/k1-supplementary-review.json`, and the actual Kaggle v1 receipt.
+Historic YAML/build identities and model weights were not edited by the review.
+
+
+## 2026-10-15 — Explicit K1 exploratory submission authorization
+
+After the review above, the user explicitly requested doing the necessary work
+and submitting K1 (then requested continuation). This authorizes an exploratory
+code-competition submission after real offline integrity/parity checks; it does
+not supply the missing second-fold confirmation or promote K1 over reader-only.
+The dated one-time authorization in state/submission-policy.json was renewed for
+this K1 checkpoint only. Final selection settings are outside this action.
+
+The offline generator now supports the exact frozen canonical-volume preprocessing
+source and VolumeStudy evaluation (12 windows, deterministic first candidate,
+actual slice positions, strict fp32). It verifies packed-notebook hashes and all
+five actual cache manifests. It bundles Linux codecs and pinned OpenCV wheels,
+disables Internet, and processes hidden test studies in batches of 32 while deleting
+completed NPZ caches. A 65-study unit check verifies chunk boundaries, prediction
+aggregation and cache release. 52 targeted tests passed.
+
+The local synthetic engineering rehearsal passed both competition-rerun and
+interactive paths, with all 15 studies predicted and zero fallback. Notebook vs
+kernel maximum probability difference was 2.9802322387695312e-08; the three-study
+synthetic parity check also passed. These checks are not real-data validity
+evidence; 58-study real gold parity on Kaggle is still required before submission.
+Evidence: artifacts/research/k1-offline-rehearsal.json.
+
+
+### K1 real offline PASS and competition submission — 2026-10-15
+
+Private inference kernel `bulsahkecici/rsna-k1-submit-20261015`, version 1,
+completed with Internet disabled. Re-decoded all 58 real gold studies using
+the frozen cache source: no quarantine; preprocessing hash and numpy/pydicom/
+OpenCV versions matched training. Strict-fp32 CUDA predictions matched the
+reviewed training reference exactly (maximum and mean absolute difference 0).
+Gold preprocessing plus inference took 307.3 seconds. All three live preview
+test studies were predicted with zero fallback; the CSV contract passed.
+Total preflight wall time was 710.7 seconds, including offline dependency setup.
+The conservative projection for approximately 1300 hidden studies was 25,370.2
+seconds (2x the larger measured per-study time plus 600 seconds), below nine
+hours; this is an estimate, not a measured hidden-test runtime.
+
+The actual checkpoint passed strict hash-pinned KneeNet architecture/finite-
+weight validation. The shared submit checkpoint validator now supports the
+vetted KneeNet source alongside the existing DINO implementation, requiring
+positive optimizer steps, the exact adjacent reader code hash, supported model
+config, target order, finite tensors and strict state loading. Submission/contract/
+status tests passed, including rejection of an untrained/unvetted KneeNet.
+
+`audit_k1_submission.py --register` produced a real operational PASS bound to
+the completed kernel v1, checkpoint/package SHA256, config/folds, gold-group
+exclusion, exact parity, valid CSV, runtime estimate and explicit user authorization.
+It registered `K1-submit-20261015` as READY_TO_SUBMIT. The guarded `rsna submit`
+then submitted kernel v1 and reconciled the numeric Kaggle server receipt:
+**57232441** (local attempt `5bc4deba-b50a-4ee7-b513-41fa69e6761d`).
+Kaggle accepted it; four daily submissions remained immediately after this request.
+At 2026-10-15 13:41:57 UTC, the actual competition status was
+**PENDING**, public/private scores blank, no reported error. Local stage is
+SUBMITTED, not SCORED. The hidden-test rerun is pending.
+
+This remains a user-authorized exploratory first-fold K1 submission. It does
+not supply second-fold confirmation, make reused gold independent, promote K1
+over reader-only, or change final submission selection.
+
+Evidence: `artifacts/kaggle/rsna-k1-submit-20261015/{submission-audit.json,
+submission-receipt.json,competition-status.json,push-receipt-v1.json,
+output/offline-result.json,output/submission.csv}`; private asset upload receipt
+and SHA256-bound MANIFEST; local registry records the actual server receipt.
+
+
+### K1 scored — 2026-10-15
+
+Kaggle receipt **57232441**, kernel v1: official status COMPLETE, public score
+**0.928**, confirmed by API at 2026-10-15T17:57:12.778316+00:00.
+Local stage is SCORED. Reader-only public best remains 0.929; its candidate/final
+selection was not changed. The user authorized proceeding with the paired
+K0F1/K1F1 second outer fold. This public score does not supply that confirmation.
+
+
+## 2026-10-15 — K0F1/K1F1 second outer fold launched
+
+Following explicit user authorization, both private Kaggle T4 training notebooks
+were accepted as version 1 at 18:07 UTC (21:07 Istanbul):
+`bulsahkecici/rsna-k0f1-kneenet-fold1-20261015` and
+`bulsahkecici/rsna-k1f1-kneenet-fold1-20261015`. Each has a 21,600-second
+(6-hour) upper runtime limit. GPU quota checked immediately before launch:
+19.99 hours remaining. Expected total use approximately 6–8 hours, based on
+previous training; queue/preprocessing time and actual duration can differ.
+
+Both use 3478 identical train UIDs, 871 identical weak holdout UIDs and the same
+58 excluded gold studies. Outer fold=1 and duplicate-group/gold exclusions passed.
+Weak fold1 UIDs are disjoint from fold0. Source archive, training cell, platform
+recipe, labels, seed, optimizer, 14-epoch schedule, initial weights, evaluation
+precision and 256px model forward resolution match across the pair. The shared
+source SHA256 is 5717075b5862ccc760ed94bd7f1557dd96b8dc741e50389c5a891c3450a62d66.
+Representations retain their original difference: K0 fixed v5 windows; K1 canonical
+full-series volumes and fresh sampling. No fold0 build/config/result was overwritten.
+
+Both caches cover all 4407 studies, from exact real receipts/pinned manifests.
+For v5, the campaign receipts' complete shard UID hashes were checked against
+the frozen folds. Attempts to fetch old v5 manifests hit Kaggle output API 429;
+they were not treated as successful downloads. Runtime pins the actual manifests
+and performs full payload SHA256/shape/mask QC before any optimizer updates.
+The new v5 symlink view preserves the original merge metadata and sidecars while
+keeping all MRI payloads on Kaggle read-only inputs. Canonical preprocessing code
+was not modified. 41 targeted cache/leakage tests passed. Both generated notebooks
+passed a real-model synthetic CPU training/interruption/resume rehearsal; resumed
+EMA weights and predictions were bit-identical to uninterrupted runs. Synthetic
+metrics remain explicitly marked synthetic and cannot authorize production results.
+
+`monitor_second_fold.py` is prepared to poll only these two accepted jobs, fetch
+numeric provenance/predictions/checkpoints after completion, verify checkpoint
+identity/finite weights/full update counts, review K0F1 then K1F1, and write the
+paired bootstrap/class review plus the cross-fold direction check. It never starts
+additional training, submits, or promotes a model. Reused gold is not pooled as
+116 independent samples. Reader-only candidate/final selections remain unchanged.
+
+Evidence: artifacts/research/second-fold-campaign.json, second-fold-rehearsal.json,
+and each private kernel folder's push-receipt-v1.json. No training AUC is claimed
+for either F1 run before actual output verification.
+
+
+### Second-fold remote startup verified
+
+Both jobs reported RUNNING and actual Tesla T4 CUDA handshakes: 15,636,037,632
+bytes VRAM, torch 2.11.0+cu128, numpy 2.1.3, timm 1.0.29, safetensors 0.8.0,
+pydicom 3.0.1. Runtime package versions match across the pair. All pinned cache
+mounts were located, and embedded source/model-code/numeric-label verification
+passed. Full cache QC precedes optimizer updates; no F1 AUC is claimed yet.
+The detached local monitor was started and observed to produce a second
+heartbeat after 60 seconds; PID/log details are in second-fold-monitor-process.json.
+It can collect/review while this Mac remains available. No raw MRI is fetched.
+Startup evidence: artifacts/research/second-fold-startup-verification.json.
+
+
+## K0F1/K1F1 completed real comparison — 2026-10-15T22:27:27.863752+00:00
+
+Both real 14-epoch trainings and checkpoint/prediction identity checks passed. Matched runtime: {'gpu': 'Tesla T4', 'torch': '2.11.0+cu128', 'packages': {'numpy': '2.1.3', 'timm': '1.0.29', 'safetensors': '0.8.0', 'pydicom': '3.0.1'}, 'amp_dtype': 'torch.float16', 'micro_batch': 2, 'eval_precision': 'fp32'}. Fold1 weak K1F1−K0F1 delta +0.005438, paired bootstrap 95% CI [-0.0013074341110825478, 0.011849874605919174]; 847 scored pairs. Same positive direction across folds: True. Fold1 strict threshold pass: False. Gold remains reused development data and was not pooled. Class regressions and per-class AUCs are in the individual reviews. Reader-only/final selections unchanged; no automatic promotion/submission. Evidence: artifacts/research/second-fold-review.json and each p1-*/output/review.json.
+
+
+## 2026-10-16 — Post-confirmation path: fixed ensemble screen, bounded K2R320
+
+The second-fold campaign is COMPLETE_REVIEWED, both checkpoints/hash/finite/update
+checks passed. Fold0 K1−K0 weak delta +0.00861166, CI [0.00133200, 0.01670475]
+(837 scored pairs); fold1 K1F1−K0F1 +0.00543772, CI [-0.00130743, 0.01184987]
+(847 pairs). Fold1 K0F1=0.89295, K1F1=0.89839. The fixed same-direction
+confirmation criterion passes; the stricter per-fold CI criterion does not pass
+on fold1. Descriptive pooled two-fold weak delta +0.00613937, CI
+[0.00092433, 0.01115831], 1684 unique scored studies. Gold was not duplicated
+or pooled; it remains repeatedly used development data, not an independent test.
+
+Before computing new blend scores, fixed the primary development screen to
+rank50(reader, mean probabilities(K1,K1F1)). No class routing/weight search.
+On the same 58 reused gold studies: reader 0.91053309; K1 0.90311329; K1F1
+0.88463467; two-fold K1 probability mean 0.89814861; primary rank50 0.90758218
+(delta reader -0.00295092). The descriptive single-K1 rank50 was 0.91048789
+(delta -0.00004521), effectively unchanged at this precision/sample size. The
+primary fails the positive-point-delta gate regardless of its CI, so no bootstrap
+is needed to reject promotion by that gate. This does not prove every ensemble
+is inferior. Reader overlap is unknown; this is not independent reader OOF.
+No blend submission or further weight tuning. Reader-only public 0.929 remains
+the candidate; actual K1 public score is 0.928. Evidence: k1-next-step-screen*.json.
+
+K1's same-direction confirmation permits the next planned resolution hypothesis.
+K2R320 changes only model forward resolution 256→320 at fixed K1 fold0 train/
+weak/gold UIDs, labels, masks, cache, sampling, backbone/initial weights, seed,
+14-epoch schedule, effective batch8 and fp32 evaluation. Exact pixel, volume
+dataset, soft-pool and mount source bytes were checked against K1's embedded
+archive and match. The 384px canonical cache is reused read-only; no rebuild
+and no MRI download to Mac. K1 checkpoints/configs/builds remain immutable.
+
+Before results: require weak delta vs K1 >= +0.004 and 2000-draw paired
+bootstrap lower bound >0; report every gold/class regression; only then consider
+a fold1 confirmation. Cap this hypothesis at one full fold0 run. No automatic
+promotion or competition submission.
+
+Measured resource stop: discard the initial 16 cold micro-batches, measure the
+next64, stop if projected total training exceeds 21600 seconds or peak allocated
+VRAM exceeds90% of device memory. Kernel hard limit25200 seconds(7h). The
+initial16-batch throughput was unsuitable for budgeting (K1 cold .55 studies/s
+versus much faster whole-run throughput), so it is not used as steady-state
+estimate. Resource-gate stops emit no completed-training AUC.
+
+46 targeted tests passed. A synthetic real-model CPU rehearsal actually exercised
+the guard with shortened warmup, interrupted/resumed the new training cell, and
+required EMA weights and predictions bit-identical to uninterrupted execution.
+Synthetic results remain explicitly labeled and are not production evidence.
+
+Private T4 job `bulsahkecici/rsna-k2r320-kneenet-fold0-20261016` v1 accepted
+at 2026-10-16 07:16:05 UTC (10:16 Istanbul); observed RUNNING. GPU quota
+checked before launch:12.77h. Only this one job was started. A separate detached
+local monitor collects resource gate/provenance/checkpoint/predictions and reviews
+K2 against K1; no restarts or submissions. Its host must remain available.
+Evidence: artifacts/research/k2-campaign.json, k2-rehearsal.json, k2-monitor.log,
+and the kernel folder's push-receipt-v1.json. K2 AUC/public score is pending.
+
+
+## K2R320 completed — 2026-10-16T14:33:05.123101+00:00
+
+Real K2R320 versus K1: weak delta -0.000199, 95% paired bootstrap CI [-0.006139648637193846, 0.005595426230275528]. Decision: not_supported. Checkpoint/coverage/finite-output checks passed. Reused gold/class regressions in review.json. No automatic submission/promotion; confirm fold1 only if fold0 passes.
+
+
+### K2R320 resolution branch closed — 2026-10-16T16:40:14.657589+00:00
+
+Weak delta -0.00019905, CI [-0.00613965, 0.00559543], fails the pre-set gain rule. Gold development delta -0.00392689; reused gold is not independent. Run completed and integrity checks passed, but increased resolution is not supported. No K2 fold1, resolution scan or submission. Preserve K1/256 as own-model baseline and reader-only as candidate. No new GPU job launched.
+
+## K3EV2 — one complementary encoder package, 2026-10-16
+
+K2R320 is closed: weak delta -0.000199 versus K1, extra runtime and memory. K1 submission receipt 57232441 remains public 0.928; the external reader reference receipt 57178710 is 0.929. No new competition submission is claimed.
+
+K3EV2 pre-registers one EfficientNetV2-S (`tf_efficientnetv2_s.in21k_ft_in1k`) encoder package against K1 on fold 0: identical canonical volumes, numeric soft labels, gold/group exclusions, 256 px forward, k=8, 14 epochs, seed 2026, effective batch 8. The architecture, ImageNet21k→1k pretraining and required mean/std 0.5 normalization change together; this is not a pure architecture causal ablation. Micro batch 1 / accumulation 8 is fixed for T4 memory. Head remains the pinned reader's 384-dimensional two-layer study model. The vetted reader source bytes are unchanged.
+
+Official pretrained source: https://huggingface.co/timm/tf_efficientnetv2_s.in21k_ft_in1k (Apache-2.0), revision ea9abc143ea2b9d8e1ec1de277bce02149b9cf0e, safetensors SHA-256 6f1933fb6c0d760eae03863ad0110570393e16c0610f8fe94dc9f978e52ec59c. Model download hash verified locally; MRI stays on Kaggle.
+
+A separate K3EV2PILOT uses 192 train-only studies, most present slots first with deterministic UID-hash ties, without looking at target values. Its derived cache retains the pinned original manifests, full payload hashes and pixel QC. It runs 16 warmup + 64 measured micro batches with real masked loss, AdamW, scaler and EMA, then checks strict-fp32 12-window evaluation memory on training images only and stops. It produces no AUC, validation predictions or completed-model checkpoint. Its full-training projection uses all 3479 studies ×14 epochs, not the smaller pilot cohort. Pilot hard limit 1 hour, projected full training <=8 hours, peak train/eval VRAM <=90%.
+
+The controller `scripts/monitor_k3.py` uploads the pilot once after engineering checks. A passed pilot and API-observed GPU quota >=10.5h are both required for one full K3EV2 upload (10h hard kernel limit); quota refresh timestamp has no assumed timezone. A push attempt is persisted before network mutation; uncertain uploads cannot be retried automatically. Full results require exact checkpoint/UID/hash verification and paired review against K1. Fixed fold-0 requirement: weak delta >=0.004, paired CI lower bound >0; report all gold/class regressions. No automatic competition submission, second fold or additional model family. Controller state/receipts: artifacts/research/k3-campaign.json. Local controller requires this Mac to remain awake; an already launched Kaggle job continues remotely.
+
+K3 local checks completed: 55 tests passed; real pretrained encoder loaded in the synthetic CPU rehearsal; interrupted/resumed EMA weights and predictions were bit-identical to an uninterrupted run. A separate synthetic rehearsal passed the pilot-only stop path without validation/model artifacts. These are engineering checks, not medical validation or GPU speed results. Evidence: artifacts/research/k3-local-checks.json.
+
+K3EV2PILOT v1 accepted by Kaggle at 2026-10-16T16:58:00Z, timeout 3600 seconds, NvidiaTeslaT4; server status RUNNING observed at 16:58:22Z. This receipt is a notebook execution, not a competition submission. The bounded local controller was started; process/log evidence in artifacts/research/k3-monitor-process.json and k3-monitor.log. Full K3EV2 has not been uploaded yet; it remains gated on successful real calibration and sufficient observed quota.
+
+## K3 Colab handoff — 2026-10-16
+
+User requested Colab execution. The verified pilot passed at 4.1101 studies/s, 11850.3 seconds projected full training (3.29h, excludes transfer/QC/evaluation), peak train/eval 5,461,640,192 bytes. GPU quota remained 2.50h. The waiting local Kaggle launcher was terminated after verifying its PID command and confirming that no full-job push attempt existed. Campaign state is COLAB_HANDOFF; Kaggle auto-start is held to prevent two full runs.
+
+Prepared `notebooks/generated/colab/K3EV2.ipynb` and a separate `K3EV2.build.json`; the receipt-bound Kaggle notebook/build were preserved. Colab's decoded training cell is byte-identical to the verified K3 cell. All source/config/weights/UID pins remain equal. Setup, download and collection are separately pinned for Colab, and GPU/AMP differences are logged. Numeric review must use the Colab-specific build rather than the Kaggle platform record.
+
+Colab downloads only pinned `cache/` outputs directly to its ephemeral disk (65.865 GiB); no MRI is copied to Mac or Drive. Setup requires >=75 GiB free ephemeral disk. Checkpoints/optimizer resume state and numeric results go to `/content/drive/MyDrive/RSNA/colab/K3EV2-colab`. Kaggle credentials are requested with getpass and are not embedded. The notebook verifies GPU, source, labels, manifests and every pixel payload before real training; final archive includes the resource gate and handshake.
+
+`rsna runtime capabilities` confirmed automatic_acquisition=false. `rsna runtime acquire --gpu-order A100,L4,T4 --wait-seconds 300` produced a manual handoff; no GPU lease or training is claimed. User must open a Colab GPU runtime, upload this notebook and Run all, completing Google Drive OAuth and hidden Kaggle authentication. Colab availability and storage are runtime-dependent. Evidence: artifacts/research/k3-colab-handoff.json. The four controller tests, including the terminal Colab hold, pass.
+
+K3 Colab cache correction — 2026-10-17: User confirmed previous notebook downloads had been retained on Drive. The handoff now checks `MyDrive/RSNA/cache` first, including the established `<kernel-slug>-<manifest-sha-prefix>.tar` format and extracted cache directories. It reuses only exact pinned K1 canonical-volume manifests with complete payload sizes; the unchanged training cell still performs full SHA/pixel QC before training. Runtime caches are reused first, then matching Drive data is copied/extracted to ephemeral Colab disk. Kaggle authentication/download is deferred until a missing or incompatible part is found. Existing Drive files are never modified or deleted; incompatible K0/v5 archives are preserved. Safe archive extraction, exact version binding, incomplete-payload recovery and archive preservation passed three tests. Notebook/build regenerated only in the separate Colab directory; Kaggle identities and training bytes remain unchanged. No Colab execution claimed.
+
+## K3EV2 completed and rejected — 2026-10-17
+
+Imported the user's `artifacts/colab/K3EV2-colab/colab-results.zip` (SHA-256 e7464331614d98b6d368c660b4a25ef153d518376f0fa254198e0d57ca6c2087). Verified against the separate, exactly matching Colab build, preserving the receipt-bound Kaggle build. Strict checkpoint load, approved reader source, required EfficientNet normalization, finite weights, source/config/labels/folds hashes, train/gold/group exclusion and exact fp32 prediction coverage passed. Real training: 3479 studies, 14 epochs, 6076 attempted/applied updates, zero skipped; 58 gold +869 weak predictions, 837 weak studies scoreable (32 without numeric labels excluded). Checkpoint SHA-256 61680fa0e3cab067ddfc3924068233e5052f45887f9946af2d18f746771c9002.
+
+K3EV2 weak AUC 0.84775642 versus K1 0.87815868, paired delta -0.03040226, bootstrap 95% CI [-0.04443553, -0.01764142], 2000 draws, seed 2026, 837 pairs. All twelve weak per-class deltas are negative. Reused-gold AUC 0.87471739 versus K1 0.90311329, delta -0.02839589, 95% CI [-0.05544599, -0.00065092]. All gold subgroup/class outcomes are retained in review.json. This does not pass the fixed fold-0 gate.
+
+One fixed complementarity screen (no weight/class search) on the same reused 58 gold: reader 0.91053309, rank50(reader,K3EV2) 0.90593633, delta -0.00459676. Negative point estimate rejects this blend; reader training overlap is unknown and these reused gold results are not independent OOF or leaderboard evidence.
+
+Runtime: NVIDIA A100-SXM4-40GB, torch2.11.0+cu130, timm1.0.30, bf16 training, micro1/accum8, fp32 evaluation. Reported training+evaluation 5909.4s (1.64h), peak 5.50GB; cache download/QC are excluded. All five cache-sources entries report Kaggle downloads rather than Drive restoration. The previous K1 used T4/fp16/timm1.0.29/micro2; changes in hardware/AMP and encoder/pretraining/normalization prevent isolating an architecture-only causal effect.
+
+Decision: close the tested K3 recipe; no second fold, retraining, promotion or submission. Existing K1 public receipt remains 0.928; external reader reference receipt remains 0.929. Kaggle auto-launch stays disabled and the campaign is COMPLETE_REVIEWED. Evidence: artifacts/research/k3-decision.json, artifacts/research/k3-reader-screen.json, artifacts/colab/p1-K3EV2/output/{verification.json,review.json}. Nine relevant platform-build/controller/cache/leakage tests passed. Review CLI now accepts an explicit --build-dir to validate platform identity without overwriting older builds or waiving any hashes.
+
+
+## 2026-10-18 — Public CoAtNet + R6 reference reproduction
+
+User authorized execution and submission after the open-source review. Private offline kernel: `bulsahkecici/rsna-r6-coatnet-public-reference-20261018`, version 1. Source: goodpjw2008 v27 recipe, source notebook SHA256 `a906df9328b6a53d7e0fe4e18962c655867c8617c54e6745a8af647033b2399c`. All original cells retained unchanged; only attribution, timing and final CSV validation added. R6 manifest verified locally against `6508ce6921eda986c885b2226fa55dd4d2aa8e5fc570b4c007c9a60c05bfc648`; remote original notebook verifies weights.
+
+Prepared by `scripts/prepare_public_r6.py`; remote audit by `scripts/check_public_r6.py`. Evidence: `artifacts/kaggle/rsna-r6-coatnet-reference-20261018/`. Initial state RUNNING, no submission receipt or measured score yet. Upstream 0.958 is not our score. This is a public-reference inference reproduction, no new training or independent-holdout claim. R6 gold exclusion is reported by the hash-pinned manifest and matching trainer code; complete training UID lists were not independently reconstructed. Kaggle changed the requested id to the title-derived canonical slug above; do not push a duplicate under the initial id.
+
+The authorized watcher `scripts/run_public_r6_submission.py --submit` is active (exec session 37037). It waits for v1 COMPLETE, validates actual output hashes/CSV and zero R6/CoAtNet fallback, checks reader completion in execution logs, checks daily capacity, then submits that kernel version once. Exclusive locking and durable pre-request attempt records prevent blind duplicate submissions. A Kaggle receipt is required before a submitted state is recorded; scores are read from submission history. A failed check stops the controller. Current status remains RUNNING; no receipt or score claimed.
+
+
+### 2026-10-19 — R6/CoAtNet reference scored
+
+Kaggle submission history independently refreshed: receipt **57367731**, `SubmissionStatus.COMPLETE`, public **0.958**, private score unavailable. Kernel `bulsahkecici/rsna-r6-coatnet-public-reference-20261018` v1. Automatic controller completed the output audit and submitted successfully. Public improvement: +0.029 over previous reader 0.929 and +0.030 over K1 0.928. This reproduces the public reference score; it is not a new independently trained model or evidence of private leaderboard rank. Final-selection UI was not inspected or changed. Evidence: `artifacts/kaggle/rsna-r6-coatnet-reference-20261018/submission-record.json`, `operational-audit.json`, and `submit-response.json`.
+
+
+## 2026-10-19 — Fixed V2 blend weights candidate launched
+
+User authorized running the prepared candidate. Private offline GPU kernel `bulsahkecici/rsna-r6-v2weights-20261019` v1 successfully pushed; observed QUEUED. Baseline receipt 57367731, public 0.958. Only one recipe cell changed: Raptor share lateral OA .20→.15, PF OA .60→.65, synovitis .80→.85, Baker .35→.30. Attribution updated; all other source cells unchanged. Exact diff and syntax checks passed. No local gold fitting or new training.
+
+Watcher session 30672: `scripts/run_public_r6_submission.py --run-folder artifacts/kaggle/rsna-r6-v2weights-20261019 --submit`. Requires completed kernel, real CSV/UID/hash checks, zero model fallbacks, reader completion, exact expected blend weights and daily capacity before a single submission. Durable attempt guard prevents blind retries. Evidence folder `artifacts/kaggle/rsna-r6-v2weights-20261019/`. No score or submission receipt yet; baseline/final selections unchanged.
+
+
+### 2026-10-19 — V2 weights submitted after watcher recovery
+
+Notebook v1 COMPLETE. Initial watcher stopped on a failed read-only status query before any submission attempt. Added bounded retries for read-only Kaggle operations; mocked regression check confirms recovery and no submit retry. Restarted watcher session 76863. Operational audit PASS: three visible studies, zero R6/CoAtNet fallbacks, exact fixed weights, 505.14 seconds. Submission receipt **57394395**, status PENDING, no public score yet. Baseline remains 57367731 / 0.958.
+
+
+### 2026-10-20 — V2 weights rejected: 0.957
+
+Live Kaggle history confirms receipt 57394395 COMPLETE, public 0.957. Baseline 57367731 remains 0.958. Reject the fixed four-class weight variant; retain the reference. Displayed difference -0.001 is not a significance estimate. The predeclared single-variant experiment is closed; no further gold/public weight sweep. Private scores unavailable. Final-selection UI has not been changed. Decision: `artifacts/kaggle/rsna-r6-v2weights-20261019/decision.json`. Next useful investigation is diagnostic component errors and complementary anatomical evidence, not another blind weight change.
+
+
+## 2026-10-20 — Meniscus sequence-head pilot launched
+
+Private GPU kernel `bulsahkecici/rsna-meniscus-sequence-pilot-20261020` v1 accepted, 3600-second run limit. 96 train-only studies selected by stable UID hash after numeric target confidence and verified sagittal/coronal geometry availability filters. Fold0 and gold/duplicate groups excluded using existing folds. Existing K1 canonical 384px cache reused remotely; selected payload SHA256 checked remotely.
+
+Frozen ImageNet ConvNeXt-tiny, native central 320px view, 16 ordered adjacent triplets in each available sagittal/coronal FS/non-FS slot, trainable temporal convolution plus finding-specific pooling; three head epochs. This is NOT a localized meniscus ROI model and does NOT use exact per-slice mm coordinates (cache retains order/median spacing). Numeric target confidence <=.1 or >=.9 is a proxy, not new report adjudication. No validation AUC, promotion, second fold, or submission claimed. Local head checks passed for masking absent series, order sensitivity, gradient flow and two-target output. Artifacts: `artifacts/kaggle/rsna-meniscus-sequence-pilot-20261020/`. Entry code: `scripts/meniscus_sequence_pilot.py`; builder: `scripts/prepare_meniscus_pilot.py`.
+
+
+### Meniscus sequence pilot — COMPLETE verified
+
+Kaggle v1 COMPLETE; remote experiment matches local configuration and training source hash. Log confirms 96/96 feature extractions. Real pilot PASS: 36 applied optimizer updates over 3 epochs; first/last minibatch training loss 0.68522/0.42530 (different batches, not validation improvement). Slice reversal changes logits by max 0.04469, establishing order sensitivity only. Pilot-code timer 56.50 seconds, not total notebook wall time. No AUC, ROI localization, checkpoint quality or ensemble gain established. Next: evaluate a sequence head against an order-agnostic head on identical features under two held-out folds; do not submit the pilot. Evidence: `artifacts/kaggle/rsna-meniscus-sequence-pilot-20261020/review.json`.
+
+
+## 2026-10-20 — Meniscus two-fold evaluation launched
+
+User requested real AUC and submission. Private GPU kernel `bulsahkecici/rsna-meniscus-twofold-20261020` v1 launched with 6 h upper bound. Frozen ImageNet ConvNeXt-tiny features extracted for 4113 studies, ordered and order-invariant heads trained separately for 15 fixed epochs on folds 0/1. Train counts 3095/3074, weak eval counts 869/870, gold58 excluded from every training pool and its duplicate groups. Feature extraction may include holdout/gold because encoder is fixed ImageNet, with no fit or adaptation. Gold remains reused development data. No local report text is uploaded. Four head correctness tests passed.
+
+Predeclared review: ordered-minus-invariant two-target weak AUC positive on both folds, paired group-bootstrap mean delta CI lower >0. Gold AUC reported but not used for epoch/weight search. This alone does not prove complementarity against 0.958 R6/CoAtNet. Final submit remains authorized but requires a supported candidate plus offline checks; failed head hypothesis is not submitted. Watcher `scripts/watch_meniscus_twofold.py` (session 64361) downloads numeric metrics/predictions only and writes `review.json`. No AUC or submission receipt exists yet for this new model.
+
+
+### Meniscus two-fold outcome — no supported sequence gain
+
+Kaggle v1 COMPLETE; real metrics show 1455 applied updates per head/fold. Two-target weak AUC: fold0 invariant 0.744344 vs ordered 0.728078 (delta -0.016266); fold1 invariant 0.721401 vs ordered 0.719535 (delta -0.001866). Paired duplicate-group bootstrap mean delta 95% CI [-0.024144, 0.005934]. Gold58 two-target AUC is inconsistent: fold0 ordered 0.815942 vs control 0.773915; fold1 ordered 0.780683 vs control 0.829066. Gold was reused development data, not independent confirmation.
+
+Decision: close this fixed-ImageNet-feature sequence-head experiment; do not submit or add it to the 0.958 reference. No supported gain on either outer fold, no claim of significant harm or of a universal failure of sequence models. This experiment did not test anatomical ROI localization, MRI-specific encoder fine-tuning, or exact-mm positions. A new GPU experiment would require a distinct hypothesis addressing those limitations rather than another head-weight sweep. Evidence: `artifacts/kaggle/rsna-meniscus-twofold-20261020/review.json`.
+
+
+## MRI encoder follow-up — authorized and launched
+
+User explicitly approved transferring the numeric medical label package to a private Kaggle notebook, GPU training, and committing/pushing code. Kernel `bulsahkecici/rsna-meniscus-mri-twofold-20261020` v1 successfully pushed; observed QUEUED. This replaces ImageNet weights with our fold-matched K1/K1F1 encoders while keeping the previous input/head/training recipe fixed. Original encoder training UIDs, checkpoint hashes, fold hashes and exclusion of validation/gold duplicate groups were checked. Both encoder exports strictly load into the inference architecture; four head tests pass.
+
+No new weight dataset was uploaded: checkpoints are mounted read-only from existing private Kaggle training outputs and verified by SHA256. The earlier proposed dataset upload was rejected by automatic review; the subsequent notebook push was initially blocked for explicit numeric-label-transfer approval, which the user then supplied. The successful push contains code and numeric targets, no MRI or raw report text.
+
+Watcher: `scripts/watch_meniscus_twofold.py --run-folder artifacts/kaggle/rsna-meniscus-mri-twofold-20261020`, session 34791. Remote result not yet available; no AUC or submission claimed. Evidence: `artifacts/kaggle/rsna-meniscus-mri-twofold-20261020/`.
