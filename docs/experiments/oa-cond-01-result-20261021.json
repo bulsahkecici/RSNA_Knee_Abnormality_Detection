@@ -1,0 +1,92 @@
+{
+  "kind": "real",
+  "decision": "REJECT_CONDITIONAL_SAMPLING",
+  "weak_fold_results": {
+    "0": {
+      "Lateral OA": {
+        "n": 454,
+        "n_pos": 178,
+        "natural_auc": 0.8271047060739292,
+        "conditional_auc": 0.8042256961406937,
+        "delta": -0.02287900993323544
+      },
+      "Lateral OA | Medial OA positive": {
+        "n": 191,
+        "n_pos": 124,
+        "natural_auc": 0.7510832932113625,
+        "conditional_auc": 0.7212325469427058,
+        "delta": -0.02985074626865669
+      },
+      "Medial OA": {
+        "n": 526,
+        "n_pos": 297,
+        "natural_auc": 0.8645553056033407,
+        "conditional_auc": 0.8798023907194215,
+        "delta": 0.01524708511608075
+      }
+    },
+    "1": {
+      "Lateral OA": {
+        "n": 478,
+        "n_pos": 190,
+        "natural_auc": 0.8592836257309943,
+        "conditional_auc": 0.8300073099415204,
+        "delta": -0.029276315789473872
+      },
+      "Lateral OA | Medial OA positive": {
+        "n": 190,
+        "n_pos": 130,
+        "natural_auc": 0.7682051282051282,
+        "conditional_auc": 0.7380769230769231,
+        "delta": -0.030128205128205132
+      },
+      "Medial OA": {
+        "n": 530,
+        "n_pos": 282,
+        "natural_auc": 0.9055994051704416,
+        "conditional_auc": 0.8941889727751087,
+        "delta": -0.011410432395332903
+      }
+    }
+  },
+  "paired_group_bootstrap_primary_delta_ci95": [
+    -0.041319747933007314,
+    -0.008532969224598655
+  ],
+  "bootstrap_draws": 2000,
+  "seconds": 4012.1628943930004,
+  "submission_eligible": false,
+  "gold_is_independent": false,
+  "competition_auc": null,
+  "note": "Weak report-label agreement only. Passing requires separate reference complementarity assessment.",
+  "kernel": "bulsahkecici/rsna-oa-conditional-twofold-20261020",
+  "kernel_version": 1,
+  "remote_status": "COMPLETE",
+  "submission_made": false,
+  "local_evidence": {
+    "artifacts/kaggle/rsna-oa-conditional-twofold-20261020/review.json": {
+      "bytes": 5892,
+      "sha256": "5f76319a5375b88c5f387731fada534587c13515febf3a43aba00c2e40e79b94"
+    },
+    "artifacts/kaggle/rsna-oa-conditional-twofold-20261020/experiment.json": {
+      "bytes": 1286961,
+      "sha256": "c9c2481becfaddef7605f0d998507ad615d13d742aced0a044f60e7fd0728e31"
+    },
+    "artifacts/kaggle/rsna-oa-conditional-twofold-20261020/output/oa-metrics.json": {
+      "bytes": 5920,
+      "sha256": "a937781bf50e2842c52a6ab7f2536bf7055a47186ded29ca74ed14dbb939700e"
+    },
+    "artifacts/kaggle/rsna-oa-conditional-twofold-20261020/output/oa-predictions.jsonl": {
+      "bytes": 776444,
+      "sha256": "1aadd222f0decbb47a7d0fcffe43220a34804d8a61130dceefbdeec7ccf5580d"
+    },
+    "artifacts/kaggle/rsna-oa-conditional-twofold-20261020/local-audit.json": {
+      "bytes": 911,
+      "sha256": "66d419ec386bdae715d306b12bd68223d6f36e73fbe9b697c357ed0508f9febd"
+    },
+    "artifacts/kaggle/rsna-oa-conditional-twofold-20261020/train.ipynb": {
+      "bytes": 882957,
+      "sha256": "cafe1ae59dfa37d2e21b671acd63a281fdf32dde881134d8428906387172180d"
+    }
+  }
+}
